@@ -34,7 +34,7 @@ setup(
     description="A novel paradigm for efficient generative modeling through information-theoretic computational geometry",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    url="https://github.com/your-username/dynamic-info-lattices",
+    url="https://github.com/xiufengliu/dynamic_info_lattices",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -97,9 +97,9 @@ setup(
         "pytorch"
     ],
     project_urls={
-        "Bug Reports": "https://github.com/your-username/dynamic-info-lattices/issues",
-        "Source": "https://github.com/your-username/dynamic-info-lattices",
-        "Documentation": "https://dynamic-info-lattices.readthedocs.io/",
-        "Paper": "https://arxiv.org/abs/your-paper-id",
+        "Bug Reports": "https://github.com/xiufengliu/dynamic_info_lattices/issues",
+        "Source": "https://github.com/xiufengliu/dynamic_info_lattices",
+        "Documentation": "https://github.com/xiufengliu/dynamic_info_lattices/blob/main/README.md",
+        "Paper": "https://github.com/xiufengliu/dynamic_info_lattices",
     },
 )

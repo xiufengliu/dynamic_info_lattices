@@ -32,8 +32,8 @@ Our method achieves state-of-the-art performance across 12 time series forecasti
 ### Install from Source
 
 ```bash
-git clone https://github.com/xiufengliu/EALS.git
-cd EALS
+git clone https://github.com/xiufengliu/dynamic_info_lattices.git
+cd dynamic_info_lattices
 pip install -e .
 ```
 
@@ -336,7 +336,7 @@ If you use this code in your research, please cite our paper:
   author={Xiufeng Liu and Collaborators},
   journal={Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining},
   year={2025},
-  url={https://github.com/xiufengliu/EALS}
+  url={https://github.com/xiufengliu/dynamic_info_lattices}
 }
 ```
 
@@ -357,14 +357,14 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 ## 📞 Contact
 
 For questions or issues, please:
-- Open an issue on GitHub: [https://github.com/xiufengliu/EALS/issues](https://github.com/xiufengliu/EALS/issues)
+- Open an issue on GitHub: [https://github.com/xiufengliu/dynamic_info_lattices/issues](https://github.com/xiufengliu/dynamic_info_lattices/issues)
 - Contact the authors at xiuli@dtu.dk
 - Check the documentation and examples
 
 ## 🔗 Links
 
-- **Repository**: [https://github.com/xiufengliu/EALS](https://github.com/xiufengliu/EALS)
-- **Issues**: [https://github.com/xiufengliu/EALS/issues](https://github.com/xiufengliu/EALS/issues)
+- **Repository**: [https://github.com/xiufengliu/dynamic_info_lattices](https://github.com/xiufengliu/dynamic_info_lattices)
+- **Issues**: [https://github.com/xiufengliu/dynamic_info_lattices/issues](https://github.com/xiufengliu/dynamic_info_lattices/issues)
 - **Documentation**: See README.md and code documentation
 - **Examples**: Check the `examples/` directory
 
