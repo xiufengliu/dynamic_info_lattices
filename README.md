@@ -27,7 +27,7 @@ Our method achieves state-of-the-art performance across 12 time series forecasti
 
 - Python 3.8+
 - PyTorch 2.0+
-- CUDA 11.8+ (for GPU acceleration)
+- CUDA 11.8+ (for GPU acceleration, optional)
 
 ### Install from Source
 
@@ -43,44 +43,69 @@ pip install -e .
 pip install -r requirements.txt
 ```
 
+### 🐛 Troubleshooting
+
+**CUDA Issues**: If you encounter CUDA library errors, install CPU-only PyTorch:
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```
+
+**Module Loading**: On HPC systems, you may need to load CUDA modules:
+```bash
+module load cuda/12.1
+```
+
+### 📋 Current Implementation Status
+
+✅ **Core Algorithms**: All 5 algorithms (S1-S5) implemented and tested
+✅ **Mathematical Framework**: Differential entropy formulations aligned with paper
+✅ **Neural Networks**: Score network and entropy weight network complete
+✅ **Information-Theoretic Components**: Multi-component entropy estimation working
+✅ **Adaptive Structures**: Hierarchical lattices and information-aware sampling
+
+🔧 **In Development**: Full dataset integration, advanced training utilities, comprehensive evaluation suite
+
+The core framework is production-ready. Examples use synthetic data for demonstration.
+
 ## 🚀 Quick Start
 
 ### Training
 
-Train a Dynamic Information Lattices model on the Traffic dataset:
+Train a Dynamic Information Lattices model with synthetic data:
 
 ```bash
 python examples/train_dil.py \
-    --dataset traffic \
-    --batch_size 64 \
+    --dataset synthetic \
+    --batch_size 32 \
     --learning_rate 1e-4 \
-    --num_epochs 200 \
-    --use_wandb
+    --num_epochs 50 \
+    --sequence_length 96 \
+    --prediction_length 24
 ```
 
 ### Evaluation
 
-Evaluate a trained model with comprehensive analysis:
+Evaluate a trained model:
 
 ```bash
 python examples/evaluate_dil.py \
-    --checkpoint ./experiments/dil_experiment_*/checkpoints/best_checkpoint.pt \
-    --dataset traffic \
-    --run_ablation \
-    --run_robustness \
-    --save_predictions
+    --checkpoint ./experiments/training_results.json \
+    --dataset synthetic \
+    --batch_size 32
 ```
+
+**Note**: The examples use synthetic data for demonstration. For real datasets, you would need to implement the data loading utilities in `dynamic_info_lattices/data/`.
 
 ### Programmatic Usage
 
 ```python
 import torch
+import numpy as np
 from dynamic_info_lattices import (
-    DynamicInfoLattices, DILConfig, ScoreNetwork,
-    get_dataset, DILTrainer, TrainingConfig
+    DynamicInfoLattices, DILConfig, ScoreNetwork
 )
 
-# Create model
+# Create model configuration
 config = DILConfig(
     num_diffusion_steps=1000,
     inference_steps=20,
@@ -88,16 +113,32 @@ config = DILConfig(
     entropy_budget=0.2
 )
 
-score_network = ScoreNetwork(in_channels=1, out_channels=1)
-model = DynamicInfoLattices(config, score_network, data_shape=(96, 1))
+# Create score network
+score_network = ScoreNetwork(
+    in_channels=1,
+    out_channels=1,
+    model_channels=64
+)
 
-# Load data
-train_dataset = get_dataset("traffic", split="train")
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64)
+# Create DIL model
+data_shape = (96, 1)  # (sequence_length, channels)
+model = DynamicInfoLattices(
+    config=config,
+    score_network=score_network,
+    data_shape=data_shape
+)
 
-# Train model
-trainer = DILTrainer(model, train_loader, val_loader, TrainingConfig())
-results = trainer.train()
+# Generate sample data
+batch_size = 4
+y_obs = torch.randn(batch_size, 96, 1)
+mask = torch.ones_like(y_obs)
+
+# Forward pass
+model.eval()
+with torch.no_grad():
+    output = model(y_obs, mask)
+    print(f"Input shape: {y_obs.shape}")
+    print(f"Output shape: {output.shape}")
 ```
 
 ## 📁 Repository Structure
@@ -134,22 +175,25 @@ EALS/
 
 ## 🔬 Reproducing Paper Results
 
-To reproduce all results from the paper:
+To test the core framework:
 
 ```bash
-# Run all experiments
-python examples/reproduce_paper_results.py
+# Test core implementation
+python final_verification.py
 
-# Individual dataset experiments
-for dataset in traffic solar exchange weather; do
-    python examples/train_dil.py --dataset $dataset --use_wandb
-    python examples/evaluate_dil.py \
-        --checkpoint ./experiments/dil_${dataset}_*/checkpoints/best_checkpoint.pt \
-        --dataset $dataset \
-        --run_ablation \
-        --run_robustness
-done
+# Run training example with synthetic data
+python examples/train_dil.py \
+    --dataset synthetic \
+    --num_epochs 10 \
+    --batch_size 16
+
+# Run evaluation example
+python examples/evaluate_dil.py \
+    --checkpoint ./experiments/training_results.json \
+    --dataset synthetic
 ```
+
+**Note**: Full paper reproduction requires implementing the complete dataset loading and evaluation utilities. The current examples demonstrate the core algorithmic framework with synthetic data.
 
 ## 📈 Key Algorithms
 
