@@ -3,7 +3,7 @@
 #BSUB -o logs/dil_train_%J.out
 #BSUB -e logs/dil_train_%J.err
 #BSUB -W 24:00
-#BSUB -q gpu
+#BSUB -q gpuv100
 #BSUB -gpu "num=1"
 #BSUB -R "rusage[mem=32GB]"
 #BSUB -n 8

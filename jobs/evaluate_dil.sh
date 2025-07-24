@@ -3,7 +3,7 @@
 #BSUB -o logs/dil_eval_%J.out
 #BSUB -e logs/dil_eval_%J.err
 #BSUB -W 4:00
-#BSUB -q gpu
+#BSUB -q gpuv100
 #BSUB -gpu "num=1"
 #BSUB -R "rusage[mem=16GB]"
 #BSUB -n 4
