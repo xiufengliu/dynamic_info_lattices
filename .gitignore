@@ -133,9 +133,8 @@ dmypy.json
 *.pt
 *.ckpt
 
-# Data files
-*.csv
-*.json
+# Data files (but keep our real datasets)
+!data/*.csv
 *.h5
 *.hdf5
 *.npz
@@ -166,24 +165,25 @@ wandb/
 ehthumbs.db
 Thumbs.db
 
-# Paper and manuscript files (EXCLUDE PAPER FOLDER)
-paper/
-manuscript/
-*.tex
-*.pdf
-*.bib
+# LaTeX auxiliary files (but keep main paper files)
 *.aux
-*.log
-*.out
-*.toc
+*.bbl
+*.blg
 *.fdb_latexmk
 *.fls
 *.synctex.gz
+*.toc
 
 # Temporary files
 tmp/
 temp/
 *.tmp
+
+# Test files and development artifacts
+test_*.py
+*_test.py
+final_verification.py
+debug_*.py
 
 # Large model files
 *.bin
