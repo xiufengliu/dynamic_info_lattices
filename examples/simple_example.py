@@ -18,29 +18,66 @@ from dynamic_info_lattices import (
     DynamicInfoLattices, DILConfig, ScoreNetwork
 )
 
+# Import real dataset loader
+from dynamic_info_lattices.data.real_datasets import get_real_dataset
+
+
+def create_real_data_sample(dataset_name="etth1", batch_size=4):
+    """Create sample data from real dataset"""
+    print(f"Loading sample from real dataset: {dataset_name}")
+
+    try:
+        # Load real dataset
+        dataset = get_real_dataset(
+            dataset_name=dataset_name,
+            data_dir="./data",
+            split="train",
+            sequence_length=32,
+            prediction_length=8
+        )
+
+        # Get a few samples
+        samples = []
+        for i in range(min(batch_size, len(dataset))):
+            x, y, mask = dataset[i]
+            samples.append(x)
+
+        # Stack into batch
+        y_obs = torch.stack(samples)  # [batch_size, seq_len, channels]
+        mask = torch.ones_like(y_obs)  # All data is observed
+
+        print(f"Real data shape: {y_obs.shape}")
+        print(f"Data range: [{y_obs.min():.3f}, {y_obs.max():.3f}]")
+        return y_obs, mask
+
+    except Exception as e:
+        print(f"Error loading real data: {e}")
+        print("Falling back to synthetic data...")
+        return create_synthetic_data(batch_size, 32, 1)
+
 
 def create_synthetic_data(batch_size=4, seq_len=32, channels=1):
-    """Create simple synthetic time series data"""
+    """Create simple synthetic time series data as fallback"""
     print("Creating synthetic time series data...")
-    
+
     # Generate sinusoidal data with noise
     t = torch.linspace(0, 4*np.pi, seq_len)
-    
+
     data = []
     for i in range(batch_size):
         # Different frequency and phase for each sample
         freq = 1 + 0.5 * i
         phase = np.pi * i / 4
-        
+
         # Create sinusoidal signal with noise
         signal = torch.sin(freq * t + phase) + 0.1 * torch.randn(seq_len)
         signal = signal.unsqueeze(-1)  # Add channel dimension
         data.append(signal)
-    
+
     # Stack into batch
     y_obs = torch.stack(data)  # [batch_size, seq_len, channels]
     mask = torch.ones_like(y_obs)  # All data is observed
-    
+
     print(f"Generated data shape: {y_obs.shape}")
     return y_obs, mask
 
@@ -68,7 +105,7 @@ def demonstrate_dil_components():
     
     # Create data
     batch_size, seq_len, channels = 2, 32, 1
-    y_obs, mask = create_synthetic_data(batch_size, seq_len, channels)
+    y_obs, mask = create_real_data_sample("etth1", batch_size)
     
     # Create score network
     print(f"\nCreating score network...")

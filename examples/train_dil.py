@@ -21,8 +21,9 @@ from dynamic_info_lattices import (
     ScoreNetwork, EntropyWeightNetwork
 )
 
-# Note: Some utilities may not be implemented yet
-# Using simplified versions for demonstration
+# Import real dataset loader
+from dynamic_info_lattices.data.real_datasets import get_real_dataset
+
 import torch
 import numpy as np
 import logging
@@ -36,8 +37,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Dynamic Information Lattices")
     
     # Dataset arguments
-    parser.add_argument("--dataset", type=str, default="traffic", 
-                       choices=["traffic", "solar", "exchange", "weather"],
+    parser.add_argument("--dataset", type=str, default="etth1",
+                       choices=["etth1", "etth2", "ettm1", "ettm2", "ecl", "gefcom2014",
+                               "southern_china", "traffic", "solar", "exchange", "weather"],
                        help="Dataset to use for training")
     parser.add_argument("--data_dir", type=str, default="./data",
                        help="Directory containing datasets")
@@ -119,9 +121,59 @@ def create_model(args, data_shape):
     return model
 
 
+def create_data_loaders(args):
+    """Create data loaders using real datasets"""
+    print(f"Loading real dataset: {args.dataset}")
+
+    try:
+        # Load real datasets
+        train_dataset = get_real_dataset(
+            dataset_name=args.dataset,
+            data_dir=args.data_dir,
+            split="train",
+            sequence_length=args.sequence_length,
+            prediction_length=args.prediction_length
+        )
+
+        val_dataset = get_real_dataset(
+            dataset_name=args.dataset,
+            data_dir=args.data_dir,
+            split="val",
+            sequence_length=args.sequence_length,
+            prediction_length=args.prediction_length
+        )
+
+        print(f"Train dataset: {len(train_dataset)} sequences")
+        print(f"Val dataset: {len(val_dataset)} sequences")
+
+        # Create data loaders
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=0,  # Set to 0 to avoid multiprocessing issues
+            pin_memory=False
+        )
+
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False
+        )
+
+        return train_loader, val_loader
+
+    except Exception as e:
+        print(f"Error loading real dataset: {e}")
+        print("Falling back to synthetic data...")
+        return create_synthetic_data(args)
+
+
 def create_synthetic_data(args):
-    """Create synthetic data for demonstration"""
-    print("Creating synthetic data for demonstration...")
+    """Create synthetic data as fallback"""
+    print("Creating synthetic data...")
 
     # Generate synthetic time series data
     np.random.seed(args.seed)
@@ -176,7 +228,7 @@ def create_synthetic_data(args):
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=0,  # Set to 0 to avoid multiprocessing issues
+        num_workers=0,
         pin_memory=False
     )
 
@@ -294,8 +346,8 @@ def main():
     print(f"Seed: {args.seed}")
 
     # Create data loaders
-    print("Creating synthetic data...")
-    train_loader, val_loader = create_synthetic_data(args)
+    print("Loading data...")
+    train_loader, val_loader = create_data_loaders(args)
 
     # Get data shape from first batch
     sample_batch = next(iter(train_loader))

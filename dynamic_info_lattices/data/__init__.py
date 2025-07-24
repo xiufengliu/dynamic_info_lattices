@@ -12,6 +12,11 @@ from .datasets import (
     split_dataset
 )
 
+from .real_datasets import (
+    RealTimeSeriesDataset,
+    get_real_dataset
+)
+
 from .preprocessor import (
     DataPreprocessor,
     DataAugmenter,
@@ -26,6 +31,8 @@ __all__ = [
     'WeatherDataset',
     'get_dataset',
     'split_dataset',
+    'RealTimeSeriesDataset',
+    'get_real_dataset',
     'DataPreprocessor',
     'DataAugmenter',
     'MissingDataSimulator'

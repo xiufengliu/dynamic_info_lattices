@@ -21,7 +21,9 @@ from dynamic_info_lattices import (
     ScoreNetwork
 )
 
-# Simplified imports for demonstration
+# Import real dataset loader
+from dynamic_info_lattices.data.real_datasets import get_real_dataset
+
 import torch
 import numpy as np
 import logging
@@ -40,8 +42,9 @@ def parse_args():
                        help="Path to model configuration file")
     
     # Dataset arguments
-    parser.add_argument("--dataset", type=str, default="traffic",
-                       choices=["traffic", "solar", "exchange", "weather"],
+    parser.add_argument("--dataset", type=str, default="etth1",
+                       choices=["etth1", "etth2", "ettm1", "ettm2", "ecl", "gefcom2014",
+                               "southern_china", "traffic", "solar", "exchange", "weather"],
                        help="Dataset to evaluate on")
     parser.add_argument("--data_dir", type=str, default="./data",
                        help="Directory containing datasets")

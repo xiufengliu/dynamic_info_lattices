@@ -63,24 +63,33 @@ module load cuda/12.1
 ✅ **Information-Theoretic Components**: Multi-component entropy estimation working
 ✅ **Adaptive Structures**: Hierarchical lattices and information-aware sampling
 
-🔧 **In Development**: Full dataset integration, advanced training utilities, comprehensive evaluation suite
+✅ **Real Data Integration**: Full support for real time series datasets (ETT, ECL, GEFCom2014, etc.)
+🔧 **In Development**: Advanced training utilities, comprehensive evaluation suite
 
-The core framework is production-ready. Examples use synthetic data for demonstration.
+The core framework is production-ready with real dataset support.
 
 ## 🚀 Quick Start
 
 ### Training
 
-Train a Dynamic Information Lattices model with synthetic data:
+Train a Dynamic Information Lattices model with real datasets:
 
 ```bash
+# Train on ETT dataset (Electricity Transformer Temperature)
 python examples/train_dil.py \
-    --dataset synthetic \
+    --dataset etth1 \
     --batch_size 32 \
     --learning_rate 1e-4 \
     --num_epochs 50 \
     --sequence_length 96 \
     --prediction_length 24
+
+# Train on ECL dataset (Electricity Consuming Load)
+python examples/train_dil.py \
+    --dataset ecl \
+    --batch_size 32 \
+    --learning_rate 1e-4 \
+    --num_epochs 50
 ```
 
 ### Evaluation
@@ -90,11 +99,21 @@ Evaluate a trained model:
 ```bash
 python examples/evaluate_dil.py \
     --checkpoint ./experiments/training_results.json \
-    --dataset synthetic \
+    --dataset etth1 \
     --batch_size 32
 ```
 
-**Note**: The examples use synthetic data for demonstration. For real datasets, you would need to implement the data loading utilities in `dynamic_info_lattices/data/`.
+### Available Datasets
+
+The framework now supports real time series datasets:
+
+- **ETTh1/ETTh2**: Electricity Transformer Temperature (hourly)
+- **ETTm1/ETTm2**: Electricity Transformer Temperature (15-minute)
+- **ECL**: Electricity Consuming Load
+- **GEFCom2014**: Load forecasting competition data
+- **Southern China**: Regional load data
+
+Legacy dataset names (`traffic`, `solar`, `exchange`, `weather`) are mapped to the real datasets for compatibility.
 
 ### Programmatic Usage
 
@@ -128,16 +147,17 @@ model = DynamicInfoLattices(
     data_shape=data_shape
 )
 
-# Generate sample data
-batch_size = 4
-y_obs = torch.randn(batch_size, 96, 1)
-mask = torch.ones_like(y_obs)
+# Load real data
+from dynamic_info_lattices.data.real_datasets import get_real_dataset
+
+dataset = get_real_dataset("etth1", split="train", sequence_length=96)
+x, y, mask = dataset[0]  # Get first sample
 
 # Forward pass
 model.eval()
 with torch.no_grad():
-    output = model(y_obs, mask)
-    print(f"Input shape: {y_obs.shape}")
+    output = model(x.unsqueeze(0), mask.unsqueeze(0))  # Add batch dimension
+    print(f"Input shape: {x.shape}")
     print(f"Output shape: {output.shape}")
 ```
 
@@ -181,19 +201,22 @@ To test the core framework:
 # Test core implementation
 python final_verification.py
 
-# Run training example with synthetic data
+# Run training example with real data
 python examples/train_dil.py \
-    --dataset synthetic \
+    --dataset etth1 \
     --num_epochs 10 \
     --batch_size 16
 
 # Run evaluation example
 python examples/evaluate_dil.py \
     --checkpoint ./experiments/training_results.json \
-    --dataset synthetic
+    --dataset etth1
+
+# Try the simple example with real data
+python examples/simple_example.py
 ```
 
-**Note**: Full paper reproduction requires implementing the complete dataset loading and evaluation utilities. The current examples demonstrate the core algorithmic framework with synthetic data.
+**Note**: The examples now use real datasets. Full paper reproduction requires implementing the complete evaluation metrics and experimental protocols described in the paper.
 
 ## 📈 Key Algorithms
 
