@@ -114,27 +114,35 @@ class InformationAwareSampler(nn.Module):
         active_nodes: List[Tuple[int, int, int]],
         lattice: Dict
     ) -> torch.Tensor:
-        """Compute sampling probabilities based on entropy and scale"""
+        """
+        Compute sampling probabilities based on entropy and scale
+
+        Implements Equation (4) from paper:
+        π_k(t,f,s) = exp(β_s · H_{t,f,s}^{(k)}) / Σ exp(β_{s'} · H_{t',f',s'}^{(k)})
+        """
         if len(entropy_map) == 0:
             return torch.tensor([])
-        
-        # Base probabilities from entropy
-        base_probs = torch.exp(self.config.temperature * entropy_map)
-        
-        # Scale-dependent temperature adjustment
-        scale_adjusted_probs = torch.zeros_like(base_probs)
-        
+
+        device = entropy_map.device
+
+        # Scale-dependent temperature adjustment (β_s from paper)
+        scale_adjusted_probs = torch.zeros_like(entropy_map)
+
         for i, (t, f, s) in enumerate(active_nodes):
             if i >= len(entropy_map):
                 continue
-                
-            # Adjust temperature based on scale
-            scale_temperature = self.config.temperature * (1 + 0.1 * s)
-            scale_adjusted_probs[i] = torch.exp(scale_temperature * entropy_map[i])
-        
-        # Normalize to probability distribution
+
+            # Scale-dependent temperature: β_s = β_0 · (1 + δ_s · s/S)
+            max_scale = lattice.get('max_scales', 4)
+            delta_s = 0.1  # Scale adjustment factor
+            beta_s = self.config.temperature * (1 + delta_s * s / max_scale)
+
+            # Compute probability according to Equation (4)
+            scale_adjusted_probs[i] = torch.exp(beta_s * entropy_map[i])
+
+        # Normalize to probability distribution (denominator in Equation 4)
         probabilities = scale_adjusted_probs / (torch.sum(scale_adjusted_probs) + 1e-8)
-        
+
         return probabilities
     
     def _partition_by_entropy(

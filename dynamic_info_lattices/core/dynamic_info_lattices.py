@@ -119,75 +119,106 @@ class DynamicInfoLattices(nn.Module):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
         """
         Forward pass implementing Algorithm S1: Dynamic Information Lattices
-        
+
+        Implements the complete 5-phase algorithm as specified in the paper:
+        1. Multi-component entropy estimation across all lattice nodes
+        2. Dynamic lattice adaptation based on entropy patterns
+        3. Information-aware sampling using entropy-weighted probabilities
+        4. Multi-scale updates with adaptive solvers
+        5. Cross-scale synchronization
+
         Args:
             y_obs: Observed time series data [batch_size, length, channels]
             mask: Observation mask [batch_size, length, channels]
             return_trajectory: Whether to return full sampling trajectory
-            
+
         Returns:
             Generated time series or (generated, trajectory) if return_trajectory=True
         """
         batch_size = y_obs.shape[0]
         device = y_obs.device
-        
-        # Phase 1: Initialize Hierarchical Lattice
+
+        # Validate input dimensions
+        if len(y_obs.shape) != 3:
+            raise ValueError(f"Expected 3D input [batch, length, channels], got {y_obs.shape}")
+
+        # Initialize hierarchical lattice (Algorithm S3)
         lattice_k = self.lattice.construct_hierarchical_lattice(y_obs)
-        
-        # Sample initial noise
+
+        # Sample initial noise from standard Gaussian
         z_k = torch.randn(
             batch_size, *self.data_shape,
             device=device, dtype=self.config.dtype
         )
-        
-        # Initialize entropy history
+
+        # Initialize entropy history for temporal entropy computation
         self.entropy_history = []
         trajectory = [] if return_trajectory else None
-        
-        # Inference loop
+
+        # Compute inference schedule
         inference_steps = self.config.inference_steps
-        step_size = self.config.num_diffusion_steps // inference_steps
-        
-        for i, k in enumerate(range(self.config.num_diffusion_steps - 1, -1, -step_size)):
-            k_prev = max(k - step_size, 0)
-            
-            # Phase 2: Multi-Component Entropy Estimation
+        timesteps = self._get_inference_schedule(inference_steps)
+
+        # Main inference loop implementing Algorithm S1
+        for i, (k, k_prev) in enumerate(zip(timesteps[:-1], timesteps[1:])):
+
+            # Phase 1: Multi-Component Entropy Estimation (Algorithm S2)
             entropy_map = self._estimate_entropy_map(z_k, k, lattice_k, y_obs)
-            
-            # Phase 3: Dynamic Lattice Adaptation
+
+            # Store entropy for temporal analysis
+            self.entropy_history.append(entropy_map.clone())
+
+            # Phase 2: Dynamic Lattice Adaptation (Algorithm S4)
             lattice_k_prev = self.lattice.adapt_lattice(
-                lattice_k, entropy_map, k
+                lattice_k, entropy_map, k, self._compute_entropy_gradients(entropy_map, lattice_k)
             )
-            
-            # Phase 4: Information-Aware Sampling
+
+            # Phase 3: Information-Aware Sampling (Algorithm S5)
             selected_nodes = self.sampler.stratified_sample(
-                lattice_k, entropy_map, self.config.entropy_budget
+                lattice_k_prev, entropy_map, self.config.entropy_budget
             )
-            
-            # Phase 5: Multi-Scale Updates with Adaptive Solvers
+
+            # Phase 4: Multi-Scale Updates with Adaptive Solvers
             z_k_prev = self._multi_scale_update(
-                z_k, k, k_prev, selected_nodes, y_obs, mask, entropy_map
+                z_k, k, k_prev, selected_nodes, y_obs, mask, entropy_map, lattice_k_prev
             )
-            
-            # Phase 6: Cross-Scale Synchronization
+
+            # Phase 5: Cross-Scale Synchronization
             z_k_prev = self._synchronize_scales(z_k_prev, lattice_k_prev)
-            
-            # Update for next iteration
+
+            # Update state for next iteration
             z_k = z_k_prev
             lattice_k = lattice_k_prev
-            
+
+            # Store trajectory if requested
             if return_trajectory:
-                trajectory.append(z_k.clone())
-                
-            logger.debug(f"Inference step {i+1}/{inference_steps}, k={k}")
-        
-        # Decode final result
+                trajectory.append(z_k.clone().detach())
+
+            # Check convergence criteria
+            if self._check_convergence(z_k, k, entropy_map):
+                logger.info(f"Converged early at step {i+1}/{inference_steps}")
+                break
+
+            logger.debug(f"Inference step {i+1}/{inference_steps}, k={k}, active_nodes={len(lattice_k['active_nodes'])}")
+
+        # Decode final result from lattice representation
         y_hat = self._decode_from_lattice(z_k, lattice_k)
-        
+
         if return_trajectory:
             return y_hat, trajectory
         return y_hat
     
+    def _get_inference_schedule(self, inference_steps: int) -> List[int]:
+        """Get inference timestep schedule"""
+        if inference_steps >= self.config.num_diffusion_steps:
+            return list(range(self.config.num_diffusion_steps - 1, -1, -1))
+
+        # Use uniform spacing for simplicity (could implement DDIM scheduling)
+        step_size = self.config.num_diffusion_steps // inference_steps
+        timesteps = list(range(self.config.num_diffusion_steps - 1, -1, -step_size))
+        timesteps.append(0)  # Ensure we end at 0
+        return timesteps
+
     def _estimate_entropy_map(
         self,
         z: torch.Tensor,
@@ -195,8 +226,88 @@ class DynamicInfoLattices(nn.Module):
         lattice: Dict,
         y_obs: torch.Tensor
     ) -> torch.Tensor:
-        """Estimate entropy map across all lattice nodes"""
-        return self.entropy_estimator(z, k, lattice, y_obs, self.entropy_history)
+        """Estimate entropy map across all lattice nodes using Algorithm S2"""
+        return self.entropy_estimator(z, k, lattice, y_obs, self.entropy_history, self.score_network)
+
+    def _compute_entropy_gradients(
+        self,
+        entropy_map: torch.Tensor,
+        lattice: Dict
+    ) -> torch.Tensor:
+        """Compute spatial gradients of entropy for refinement decisions"""
+        active_nodes = lattice['active_nodes']
+        gradients = torch.zeros_like(entropy_map)
+
+        for i, (t, f, s) in enumerate(active_nodes):
+            if i >= len(entropy_map):
+                continue
+
+            # Find neighboring nodes at the same scale
+            neighbors = self._find_spatial_neighbors(t, f, s, active_nodes)
+
+            if neighbors:
+                neighbor_entropies = []
+                for nt, nf, ns in neighbors:
+                    if (nt, nf, ns) in active_nodes:
+                        neighbor_idx = active_nodes.index((nt, nf, ns))
+                        if neighbor_idx < len(entropy_map):
+                            neighbor_entropies.append(entropy_map[neighbor_idx])
+
+                if neighbor_entropies:
+                    neighbor_tensor = torch.stack(neighbor_entropies)
+                    current_entropy = entropy_map[i]
+
+                    # Compute gradient magnitude using finite differences
+                    gradient_mag = torch.std(neighbor_tensor - current_entropy)
+                    gradients[i] = gradient_mag
+
+        return gradients
+
+    def _find_spatial_neighbors(
+        self,
+        t: int,
+        f: int,
+        s: int,
+        active_nodes: List[Tuple[int, int, int]]
+    ) -> List[Tuple[int, int, int]]:
+        """Find spatial neighbors at the same scale"""
+        neighbors = []
+
+        # Check 8-connected neighbors (or 2-connected for 1D)
+        if len(self.data_shape) == 1:  # 1D time series
+            for dt in [-1, 1]:
+                neighbor = (t + dt, 0, s)  # f=0 for 1D
+                if neighbor in active_nodes:
+                    neighbors.append(neighbor)
+        else:  # 2D case
+            for dt in [-1, 0, 1]:
+                for df in [-1, 0, 1]:
+                    if dt == 0 and df == 0:
+                        continue
+                    neighbor = (t + dt, f + df, s)
+                    if neighbor in active_nodes:
+                        neighbors.append(neighbor)
+
+        return neighbors
+
+    def _check_convergence(
+        self,
+        z: torch.Tensor,
+        k: int,
+        entropy_map: torch.Tensor
+    ) -> bool:
+        """Check convergence criteria"""
+        # Simple convergence check based on entropy
+        if len(self.entropy_history) < 2:
+            return False
+
+        # Check if entropy change is below threshold
+        current_entropy = torch.mean(entropy_map)
+        prev_entropy = torch.mean(self.entropy_history[-2])
+        entropy_change = torch.abs(current_entropy - prev_entropy)
+
+        convergence_threshold = 1e-4
+        return entropy_change < convergence_threshold
     
     def _multi_scale_update(
         self,
@@ -206,34 +317,50 @@ class DynamicInfoLattices(nn.Module):
         selected_nodes: List[Tuple[int, int, int]],
         y_obs: torch.Tensor,
         mask: torch.Tensor,
-        entropy_map: torch.Tensor
+        entropy_map: torch.Tensor,
+        lattice: Dict
     ) -> torch.Tensor:
         """Perform multi-scale updates with adaptive solvers"""
         z_k_prev = z_k.clone()
-        
+        active_nodes = lattice['active_nodes']
+
+        # Process selected nodes in order of decreasing entropy (most uncertain first)
+        node_entropies = []
         for t, f, s in selected_nodes:
+            if (t, f, s) in active_nodes:
+                node_idx = active_nodes.index((t, f, s))
+                if node_idx < len(entropy_map):
+                    node_entropies.append((entropy_map[node_idx], t, f, s))
+
+        # Sort by entropy (descending)
+        node_entropies.sort(key=lambda x: x[0], reverse=True)
+
+        for entropy_val, t, f, s in node_entropies:
+            # Extract local region
+            z_local = self._extract_local_region(z_k, t, f, s)
+
             # Select solver order based on entropy and stability
             solver_order = self.solver.select_solver_order(
-                entropy_map, t, f, s, k
+                entropy_map, t, f, s, k, active_nodes
             )
-            
+
             # Apply DPM solver step
-            z_local = self.solver.dpm_solver_step(
-                z_k, k, k_prev, solver_order, self.score_network,
+            z_local_updated = self.solver.dpm_solver_step(
+                z_local, k, k_prev, solver_order, self.score_network,
                 t, f, s
             )
-            
-            # Apply adaptive guidance
+
+            # Apply adaptive guidance if enabled
             if self.config.adaptive_guidance:
                 guidance_strength = self.solver.adaptive_guidance_strength(
-                    entropy_map[t, f, s], k
+                    entropy_val, k
                 )
-                guidance = self._compute_guidance(z_k, y_obs, mask, t, f, s)
-                z_local = z_local + guidance_strength * guidance
-            
-            # Update local region
-            z_k_prev = self._update_local_region(z_k_prev, z_local, t, f, s)
-        
+                guidance = self._compute_guidance(z_local, y_obs, mask, t, f, s)
+                z_local_updated = z_local_updated + guidance_strength * guidance
+
+            # Update local region in global tensor
+            z_k_prev = self._update_local_region(z_k_prev, z_local_updated, t, f, s)
+
         return z_k_prev
     
     def _compute_guidance(
@@ -258,6 +385,28 @@ class DynamicInfoLattices(nn.Module):
         
         return guidance
     
+    def _extract_local_region(
+        self,
+        z: torch.Tensor,
+        t: int,
+        f: int,
+        s: int
+    ) -> torch.Tensor:
+        """Extract local region from global tensor based on lattice coordinates"""
+        scale_factor = 2 ** s
+
+        # Handle 1D vs 2D data
+        if len(self.data_shape) == 1:  # 1D time series
+            t_start = t * scale_factor
+            t_end = min((t + 1) * scale_factor, z.shape[1])
+            return z[:, t_start:t_end]
+        else:  # 2D case
+            t_start = t * scale_factor
+            t_end = min((t + 1) * scale_factor, z.shape[1])
+            f_start = f * scale_factor
+            f_end = min((f + 1) * scale_factor, z.shape[2])
+            return z[:, t_start:t_end, f_start:f_end]
+
     def _update_local_region(
         self,
         z_global: torch.Tensor,
@@ -267,20 +416,27 @@ class DynamicInfoLattices(nn.Module):
         s: int
     ) -> torch.Tensor:
         """Update local region in global tensor"""
-        # This is a simplified version - full implementation would handle
-        # proper multi-scale updates based on lattice structure
         z_updated = z_global.clone()
-        
-        # Simple local update (would be more sophisticated in practice)
         scale_factor = 2 ** s
-        t_start = t * scale_factor
-        t_end = min((t + 1) * scale_factor, z_global.shape[1])
-        f_start = f * scale_factor
-        f_end = min((f + 1) * scale_factor, z_global.shape[2])
-        
-        if t_end > t_start and f_end > f_start:
-            z_updated[:, t_start:t_end, f_start:f_end] = z_local[:, t_start:t_end, f_start:f_end]
-        
+
+        # Handle 1D vs 2D data
+        if len(self.data_shape) == 1:  # 1D time series
+            t_start = t * scale_factor
+            t_end = min((t + 1) * scale_factor, z_global.shape[1])
+
+            if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
+                z_updated[:, t_start:t_end] = z_local[:, :t_end-t_start]
+        else:  # 2D case
+            t_start = t * scale_factor
+            t_end = min((t + 1) * scale_factor, z_global.shape[1])
+            f_start = f * scale_factor
+            f_end = min((f + 1) * scale_factor, z_global.shape[2])
+
+            if (t_end > t_start and f_end > f_start and
+                z_local.shape[1] >= (t_end - t_start) and
+                z_local.shape[2] >= (f_end - f_start)):
+                z_updated[:, t_start:t_end, f_start:f_end] = z_local[:, :t_end-t_start, :f_end-f_start]
+
         return z_updated
     
     def _synchronize_scales(

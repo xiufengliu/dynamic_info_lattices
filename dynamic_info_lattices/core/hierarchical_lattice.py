@@ -50,9 +50,15 @@ class HierarchicalLattice(nn.Module):
             lattice: Hierarchical lattice structure
         """
         L, C = y_obs.shape[1], y_obs.shape[2]
-        
-        # Determine frequency resolution
-        F = self._next_power_of_2(min(L, self.base_resolution[1]))
+
+        # Determine if we need frequency dimension based on data characteristics
+        # For 1D time series, we only use (t,s) coordinates
+        if len(self.data_shape) == 1 or C == 1:
+            F = 1  # No frequency dimension for 1D time series
+            use_frequency = False
+        else:
+            F = self._next_power_of_2(min(L, self.base_resolution[1]))
+            use_frequency = True
         
         # Initialize lattice hierarchy
         lattice_hierarchy = {}
@@ -67,8 +73,15 @@ class HierarchicalLattice(nn.Module):
             
             # Generate nodes for this scale
             for t in range(0, L, stride_t):
-                for f in range(0, F, stride_f):
-                    node = (t, f, s)
+                if use_frequency:
+                    # 2D case: use both t and f dimensions
+                    for f in range(0, F, stride_f):
+                        node = (t, f, s)
+                        scale_nodes.append(node)
+                        all_nodes.append(node)
+                else:
+                    # 1D case: only t dimension, f=0 as placeholder
+                    node = (t, 0, s)
                     scale_nodes.append(node)
                     all_nodes.append(node)
             
@@ -82,6 +95,7 @@ class HierarchicalLattice(nn.Module):
             'active_nodes': all_nodes,
             'resolution': (L, F),
             'max_scales': self.max_scales,
+            'use_frequency': use_frequency,
             'parent_child_map': self._build_parent_child_map(lattice_hierarchy),
             'node_coordinates': self._build_coordinate_map(all_nodes)
         }
@@ -94,7 +108,8 @@ class HierarchicalLattice(nn.Module):
         self,
         current_lattice: Dict,
         entropy_map: torch.Tensor,
-        k: int
+        k: int,
+        entropy_gradients: torch.Tensor = None
     ) -> Dict:
         """
         Adapt lattice structure based on entropy patterns
@@ -112,10 +127,11 @@ class HierarchicalLattice(nn.Module):
         active_nodes = current_lattice['active_nodes']
         hierarchy = current_lattice['hierarchy'].copy()
         
-        # Compute entropy gradients for refinement decisions
-        entropy_gradients = self._compute_entropy_gradients(
-            entropy_map, active_nodes, current_lattice
-        )
+        # Compute entropy gradients for refinement decisions if not provided
+        if entropy_gradients is None:
+            entropy_gradients = self._compute_entropy_gradients(
+                entropy_map, active_nodes, current_lattice
+            )
         
         # Phase 1: Refinement
         refinement_candidates = []

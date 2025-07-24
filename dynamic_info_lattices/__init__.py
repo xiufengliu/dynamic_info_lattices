@@ -17,6 +17,7 @@ __author__ = "Dynamic Information Lattices Team"
 
 from .core import (
     DynamicInfoLattices,
+    DILConfig,
     MultiComponentEntropy,
     HierarchicalLattice,
     InformationAwareSampler,
@@ -25,8 +26,7 @@ from .core import (
 
 from .models import (
     ScoreNetwork,
-    EntropyWeightNetwork,
-    DiffusionModel
+    EntropyWeightNetwork
 )
 
 from .data import (
@@ -56,15 +56,15 @@ from .utils import (
 __all__ = [
     # Core components
     'DynamicInfoLattices',
+    'DILConfig',
     'MultiComponentEntropy',
-    'HierarchicalLattice', 
+    'HierarchicalLattice',
     'InformationAwareSampler',
     'AdaptiveSolver',
     
     # Models
     'ScoreNetwork',
     'EntropyWeightNetwork',
-    'DiffusionModel',
     
     # Data
     'TimeSeriesDataset',
