@@ -32,7 +32,12 @@ Our method achieves state-of-the-art performance across 12 time series forecasti
 ### Install from Source
 
 ```bash
+# Using HTTPS
 git clone https://github.com/xiufengliu/dynamic_info_lattices.git
+
+# Or using SSH (recommended for contributors)
+git clone git@github.com:xiufengliu/dynamic_info_lattices.git
+
 cd dynamic_info_lattices
 pip install -e .
 ```
