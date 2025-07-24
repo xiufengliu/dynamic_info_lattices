@@ -50,9 +50,17 @@ pip install -r requirements.txt
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-**Module Loading**: On HPC systems, you may need to load CUDA modules:
+**HPC Cluster Setup**: On HPC systems with SLURM, load CUDA modules and use job submission:
 ```bash
-module load cuda/12.1
+# Setup environment
+module load cuda/12.9.1
+bash setup_hpc.sh
+
+# Submit training job
+sbatch jobs/train_dil.sh
+
+# Submit evaluation job
+sbatch jobs/evaluate_dil.sh
 ```
 
 ### 📋 Current Implementation Status
@@ -214,6 +222,10 @@ python examples/evaluate_dil.py \
 
 # Try the simple example with real data
 python examples/simple_example.py
+
+# For HPC cluster submission (LSF):
+bsub < jobs/train_dil.sh
+bsub < jobs/evaluate_dil.sh
 ```
 
 **Note**: The examples now use real datasets. Full paper reproduction requires implementing the complete evaluation metrics and experimental protocols described in the paper.

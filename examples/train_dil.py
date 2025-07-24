@@ -4,6 +4,20 @@ Training script for Dynamic Information Lattices
 
 This script demonstrates how to train the DIL model on time series forecasting tasks.
 It reproduces the experimental setup from the paper.
+
+HPC Cluster Usage (LSF):
+    # Submit job to cluster
+    bsub < jobs/train_dil.sh
+
+    # Or run interactively after loading modules
+    module load cuda/12.9.1
+    python examples/train_dil.py --dataset etth1 --num_epochs 100 --batch_size 32 --device cuda
+
+Local Usage:
+    python examples/train_dil.py --dataset etth1 --num_epochs 100 --batch_size 32
+
+For more options, run:
+    python examples/train_dil.py --help
 """
 
 import argparse
@@ -12,9 +26,43 @@ from torch.utils.data import DataLoader
 import numpy as np
 from pathlib import Path
 import sys
+import os
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
+
+def check_environment():
+    """Check and display environment information"""
+    print("=" * 60)
+    print("ENVIRONMENT CHECK")
+    print("=" * 60)
+
+    # Python version
+    print(f"Python version: {sys.version}")
+    print(f"Python executable: {sys.executable}")
+
+    # PyTorch version
+    print(f"PyTorch version: {torch.__version__}")
+
+    # CUDA information
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"GPU count: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+    else:
+        print("CUDA not available - will run on CPU")
+
+    # Check if CUDA module is loaded (HPC environment)
+    cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')
+    print(f"CUDA_VISIBLE_DEVICES: {cuda_visible}")
+
+    # Check conda environment
+    conda_env = os.environ.get('CONDA_DEFAULT_ENV', 'not set')
+    print(f"Conda environment: {conda_env}")
+
+    print("=" * 60)
 
 from dynamic_info_lattices import (
     DynamicInfoLattices, DILConfig,
