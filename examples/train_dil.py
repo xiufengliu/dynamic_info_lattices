@@ -68,6 +68,7 @@ from dynamic_info_lattices import (
     DynamicInfoLattices, DILConfig,
     ScoreNetwork, EntropyWeightNetwork
 )
+from dynamic_info_lattices.models.simple_score_network import SimpleScoreNetwork
 
 # Import real dataset loader
 from dynamic_info_lattices.data.real_datasets import get_real_dataset
@@ -152,8 +153,8 @@ def create_model(args, data_shape):
         device=args.device
     )
     
-    # Score network
-    score_network = ScoreNetwork(
+    # Score network - using SimpleScoreNetwork for better stability
+    score_network = SimpleScoreNetwork(
         in_channels=data_shape[-1],
         out_channels=data_shape[-1],
         model_channels=args.model_channels

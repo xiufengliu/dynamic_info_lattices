@@ -318,10 +318,10 @@ class ScoreNetwork(nn.Module):
         
         for level, mult in list(enumerate(channel_mult))[::-1]:
             out_ch = model_channels * mult
-            
+
             for i in range(num_res_blocks + 1):
                 skip_ch = input_block_chans.pop()
-                
+
                 self.up_blocks.append(
                     UpBlock(
                         ch,

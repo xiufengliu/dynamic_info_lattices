@@ -9,6 +9,11 @@ echo "Setting up Dynamic Information Lattices on HPC..."
 echo "Loading CUDA module..."
 module load cuda/12.9.1
 
+# Set CUDA environment variables to fix library issues
+export CUDA_HOME=/appl/cuda/12.9.1
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+export PATH=$CUDA_HOME/bin:$PATH
+
 # Check if conda is available
 if ! command -v conda &> /dev/null; then
     echo "Error: conda not found. Please ensure conda is installed and in PATH."

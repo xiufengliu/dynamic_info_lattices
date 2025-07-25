@@ -5,8 +5,9 @@
 #BSUB -W 24:00
 #BSUB -q gpuv100
 #BSUB -gpu "num=1"
-#BSUB -R "rusage[mem=32GB]"
-#BSUB -n 8
+#BSUB -R "rusage[mem=8GB]"
+#BSUB -R "span[hosts=1]"
+#BSUB -n 4
 
 # Dynamic Information Lattices Training Job
 # This script trains the DIL model on HPC cluster with LSF
@@ -21,15 +22,40 @@ echo "Loading modules..."
 module load cuda/12.9.1
 module list
 
-# Activate conda environment (modify as needed)
+# Activate conda environment
 echo "Activating conda environment..."
-# source ~/miniconda3/etc/profile.d/conda.sh
-# conda activate your_env_name
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate base
 
 # Check environment
 echo "Environment check:"
 python --version
-python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
+
+# Check if PyTorch is available, install if needed
+echo "Checking PyTorch installation..."
+python -c "
+try:
+    import torch
+    print(f'PyTorch: {torch.__version__}')
+    print(f'CUDA available: {torch.cuda.is_available()}')
+    if torch.cuda.is_available():
+        print(f'CUDA version: {torch.version.cuda}')
+        print(f'GPU count: {torch.cuda.device_count()}')
+except ImportError:
+    print('PyTorch not found. Installing...')
+    import subprocess
+    import sys
+    result = subprocess.run(['conda', 'install', '-y', 'pytorch', 'torchvision', 'pytorch-cuda=12.1', '-c', 'pytorch', '-c', 'nvidia'],
+                          capture_output=True, text=True)
+    if result.returncode == 0:
+        print('PyTorch installation successful!')
+        import torch
+        print(f'PyTorch: {torch.__version__}')
+        print(f'CUDA available: {torch.cuda.is_available()}')
+    else:
+        print(f'PyTorch installation failed: {result.stderr}')
+        exit(1)
+"
 
 # Navigate to project directory
 cd $LS_SUBCWD
@@ -37,6 +63,12 @@ echo "Working directory: $(pwd)"
 
 # Create logs directory if it doesn't exist
 mkdir -p logs
+
+# Install project dependencies if needed
+echo "Installing project dependencies..."
+conda install -y pip
+pip install -e . || echo "Project installation failed, continuing..."
+pip install -r requirements.txt || echo "Requirements installation failed, continuing..."
 
 # Set environment variables for GPU
 export CUDA_VISIBLE_DEVICES=0

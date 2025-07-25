@@ -96,7 +96,7 @@ class AdaptiveSolver(nn.Module):
             # Low entropy/stable: use high-order for accuracy
             return 3
     
-    def dmp_solver_step(
+    def dpm_solver_step(
         self,
         z: torch.Tensor,
         k: int,
@@ -109,7 +109,7 @@ class AdaptiveSolver(nn.Module):
     ) -> torch.Tensor:
         """
         Perform DPM solver step with selected order
-        
+
         Args:
             z: Current state
             k: Current diffusion step
@@ -117,12 +117,12 @@ class AdaptiveSolver(nn.Module):
             solver_order: Selected solver order
             score_network: Score function network
             t, f, s: Lattice coordinates
-            
+
         Returns:
             z_next: Next state
         """
         solver_fn = self.solvers.get(solver_order, self._euler_step)
-        
+
         return solver_fn(z, k, k_prev, score_network, t, f, s)
     
     def adaptive_guidance_strength(
@@ -210,15 +210,25 @@ class AdaptiveSolver(nn.Module):
         alpha_k = self._get_alpha(k)
         alpha_k_prev = self._get_alpha(k_prev)
         sigma_k = self._get_sigma(k)
-        
+
+        # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
+        z_transposed = z.transpose(-2, -1)
+
+        # Create timestep tensor with correct batch size
+        batch_size = z.shape[0]
+        timesteps = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
+
         # Compute score
         with torch.no_grad():
-            score = score_network(z, k)
-        
+            score = score_network(z_transposed, timesteps)
+
+        # Transpose back: [batch, channels, length] -> [batch, length, channels]
+        score = score.transpose(-2, -1)
+
         # Euler step
         h = alpha_k_prev - alpha_k
         z_next = z + h * score
-        
+
         return z_next
     
     def _heun_step(
@@ -236,20 +246,34 @@ class AdaptiveSolver(nn.Module):
         alpha_k = self._get_alpha(k)
         alpha_k_prev = self._get_alpha(k_prev)
         h = alpha_k_prev - alpha_k
-        
+
+        # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
+        z_transposed = z.transpose(-2, -1)
+
+        # Create timestep tensors with correct batch size
+        batch_size = z.shape[0]
+        timesteps_k = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
+        timesteps_k_prev = torch.full((batch_size,), k_prev, device=z.device, dtype=torch.long)
+
         # First stage
         with torch.no_grad():
-            score_1 = score_network(z, k)
-        
+            score_1 = score_network(z_transposed, timesteps_k)
+
+        # Transpose back for computation
+        score_1 = score_1.transpose(-2, -1)
         z_temp = z + h * score_1
-        
+        z_temp_transposed = z_temp.transpose(-2, -1)
+
         # Second stage
         with torch.no_grad():
-            score_2 = score_network(z_temp, k_prev)
-        
+            score_2 = score_network(z_temp_transposed, timesteps_k_prev)
+
+        # Transpose back
+        score_2 = score_2.transpose(-2, -1)
+
         # Heun combination
         z_next = z + h * (score_1 + score_2) / 2
-        
+
         return z_next
     
     def _third_order_step(
@@ -267,25 +291,39 @@ class AdaptiveSolver(nn.Module):
         alpha_k = self._get_alpha(k)
         alpha_k_prev = self._get_alpha(k_prev)
         h = alpha_k_prev - alpha_k
-        
+
+        # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
+        z_transposed = z.transpose(-2, -1)
+
+        # Create timestep tensors with correct batch size
+        batch_size = z.shape[0]
+        timesteps_k = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
+
         # Three-stage Runge-Kutta
         with torch.no_grad():
             # Stage 1
-            score_1 = score_network(z, k)
+            score_1 = score_network(z_transposed, timesteps_k)
+            score_1 = score_1.transpose(-2, -1)  # Transpose back
             z_1 = z + h * score_1 / 3
-            
+            z_1_transposed = z_1.transpose(-2, -1)
+
             # Stage 2
-            k_mid = k + (k_prev - k) / 3
-            score_2 = score_network(z_1, k_mid)
+            k_mid = int(k + (k_prev - k) / 3)
+            timesteps_k_mid = torch.full((batch_size,), k_mid, device=z.device, dtype=torch.long)
+            score_2 = score_network(z_1_transposed, timesteps_k_mid)
+            score_2 = score_2.transpose(-2, -1)  # Transpose back
             z_2 = z + h * (score_1 + score_2) / 6
-            
+            z_2_transposed = z_2.transpose(-2, -1)
+
             # Stage 3
-            k_mid2 = k + 2 * (k_prev - k) / 3
-            score_3 = score_network(z_2, k_mid2)
-        
+            k_mid2 = int(k + 2 * (k_prev - k) / 3)
+            timesteps_k_mid2 = torch.full((batch_size,), k_mid2, device=z.device, dtype=torch.long)
+            score_3 = score_network(z_2_transposed, timesteps_k_mid2)
+            score_3 = score_3.transpose(-2, -1)  # Transpose back
+
         # Third-order combination
         z_next = z + h * (score_1 + 3 * score_3) / 4
-        
+
         return z_next
     
     def _get_alpha(self, k: int) -> float:

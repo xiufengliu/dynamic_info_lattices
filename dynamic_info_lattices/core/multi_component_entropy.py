@@ -42,16 +42,17 @@ class MultiComponentEntropy(nn.Module):
         
     def _build_weight_network(self) -> nn.Module:
         """Build adaptive weight network for entropy component combination"""
-        # Input features: [z_features, k_embed, pos_enc, local_stats]
-        input_dim = (
-            np.prod(self.data_shape) +  # z features
+        # Use a fixed input size for the non-variable features
+        # z_features will be processed separately and pooled to fixed size
+        fixed_features_dim = (
+            64 +  # z features (pooled to fixed size)
             64 +  # k embedding
             5 +   # positional encoding (t, f, s, sin/cos terms)
             10    # local statistics
         )
-        
+
         return nn.Sequential(
-            nn.Linear(input_dim, 256),
+            nn.Linear(fixed_features_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(256, 128),
@@ -172,8 +173,14 @@ class MultiComponentEntropy(nn.Module):
 
         with torch.no_grad():
             for _ in range(self.num_mc_samples):
+                # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
+                z_local_transposed = z_local.transpose(-2, -1)
+
                 # Get score function prediction with dropout enabled
-                score_sample = score_network(z_local, timestep_tensor)
+                score_sample = score_network(z_local_transposed, timestep_tensor)
+
+                # Transpose back: [batch, channels, length] -> [batch, length, channels]
+                score_sample = score_sample.transpose(-2, -1)
                 score_samples.append(score_sample)
 
         # Restore original training state
@@ -332,8 +339,14 @@ class MultiComponentEntropy(nn.Module):
 
         try:
             with torch.no_grad():
+                # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
+                z_local_transposed = z_local.transpose(-2, -1)
+
                 # Get score function prediction
-                score = score_network(z_local, timestep_tensor)
+                score = score_network(z_local_transposed, timestep_tensor)
+
+                # Transpose back: [batch, channels, length] -> [batch, length, channels]
+                score = score.transpose(-2, -1)
 
                 # Simulate different solver order predictions
                 # In practice, these would be actual DPM-Solver implementations
@@ -345,7 +358,9 @@ class MultiComponentEntropy(nn.Module):
 
                 # Second-order prediction (simplified Heun's method)
                 z_temp = z_local + h * score
-                score_temp = score_network(z_temp, timestep_tensor - 1) if k > 0 else score
+                z_temp_transposed = z_temp.transpose(-2, -1)
+                score_temp_transposed = score_network(z_temp_transposed, timestep_tensor - 1) if k > 0 else score.transpose(-2, -1)
+                score_temp = score_temp_transposed.transpose(-2, -1) if k > 0 else score
                 mu_2 = z_local + h * 0.5 * (score + score_temp)
                 sigma_2 = torch.ones_like(z_local) * 0.05
 
@@ -422,19 +437,26 @@ class MultiComponentEntropy(nn.Module):
         s: int
     ) -> torch.Tensor:
         """Compute adaptive weights for entropy component combination"""
-        # Prepare input features
-        z_features = z_local.flatten()
-        
+        # Pool z_local to fixed size features using global pooling
+        z_flat = z_local.flatten()
+        if len(z_flat) >= 64:
+            # Use adaptive pooling to get exactly 64 features
+            z_reshaped = z_flat.view(1, 1, -1)  # [1, 1, N]
+            z_pooled = F.adaptive_avg_pool1d(z_reshaped, 64).squeeze()  # [64]
+        else:
+            # Pad with zeros if too small
+            z_pooled = F.pad(z_flat, (0, 64 - len(z_flat)))
+
         # Time step embedding
         k_embed = self._sinusoidal_embedding(k, 64)
-        
+
         # Positional encoding
         pos_enc = torch.tensor([
             np.sin(0.1 * t), np.cos(0.1 * t),
             np.sin(0.1 * f), np.cos(0.1 * f),
             s / self.config.max_scales
         ], device=z_local.device, dtype=z_local.dtype)
-        
+
         # Local statistics
         local_stats = torch.tensor([
             torch.mean(z_local), torch.std(z_local),
@@ -443,13 +465,13 @@ class MultiComponentEntropy(nn.Module):
             torch.norm(z_local), torch.sum(torch.abs(z_local)),
             torch.sum(z_local > 0).float(), torch.sum(z_local < 0).float()
         ], device=z_local.device, dtype=z_local.dtype)
-        
+
         # Concatenate all features
-        features = torch.cat([z_features, k_embed, pos_enc, local_stats])
-        
+        features = torch.cat([z_pooled, k_embed, pos_enc, local_stats])
+
         # Get adaptive weights
         weights = self.weight_network(features.unsqueeze(0)).squeeze(0)
-        
+
         return weights
     
     def _sinusoidal_embedding(self, x: int, dim: int) -> torch.Tensor:

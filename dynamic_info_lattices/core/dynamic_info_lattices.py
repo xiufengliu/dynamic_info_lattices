@@ -396,11 +396,16 @@ class DynamicInfoLattices(nn.Module):
         scale_factor = 2 ** s
 
         # Handle 1D vs 2D data
-        if len(self.data_shape) == 1:  # 1D time series
+        # For time series data with shape (seq_len, channels), treat as 1D along sequence dimension
+        if len(self.data_shape) == 2 and len(z.shape) == 3:  # Time series: [batch, seq_len, channels]
+            t_start = t * scale_factor
+            t_end = min((t + 1) * scale_factor, z.shape[1])
+            return z[:, t_start:t_end, :]  # Keep all channels
+        elif len(self.data_shape) == 1:  # Pure 1D time series
             t_start = t * scale_factor
             t_end = min((t + 1) * scale_factor, z.shape[1])
             return z[:, t_start:t_end]
-        else:  # 2D case
+        else:  # True 2D spatial data
             t_start = t * scale_factor
             t_end = min((t + 1) * scale_factor, z.shape[1])
             f_start = f * scale_factor
@@ -420,13 +425,20 @@ class DynamicInfoLattices(nn.Module):
         scale_factor = 2 ** s
 
         # Handle 1D vs 2D data
-        if len(self.data_shape) == 1:  # 1D time series
+        # For time series data with shape (seq_len, channels), treat as 1D along sequence dimension
+        if len(self.data_shape) == 2 and len(z_global.shape) == 3:  # Time series: [batch, seq_len, channels]
+            t_start = t * scale_factor
+            t_end = min((t + 1) * scale_factor, z_global.shape[1])
+
+            if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
+                z_updated[:, t_start:t_end, :] = z_local[:, :t_end-t_start, :]  # Keep all channels
+        elif len(self.data_shape) == 1:  # Pure 1D time series
             t_start = t * scale_factor
             t_end = min((t + 1) * scale_factor, z_global.shape[1])
 
             if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
                 z_updated[:, t_start:t_end] = z_local[:, :t_end-t_start]
-        else:  # 2D case
+        else:  # True 2D spatial data
             t_start = t * scale_factor
             t_end = min((t + 1) * scale_factor, z_global.shape[1])
             f_start = f * scale_factor
