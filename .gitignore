@@ -188,7 +188,6 @@ debug_*.py
 # Large model files
 *.bin
 *.safetensors
-models/
 
 # Configuration files with secrets
 config.yaml
