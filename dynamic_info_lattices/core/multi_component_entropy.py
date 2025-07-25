@@ -398,12 +398,22 @@ class MultiComponentEntropy(nn.Module):
         
         if temporal_diffs:
             temporal_tensor = torch.stack(temporal_diffs)
-            cov_matrix = torch.cov(temporal_tensor.flatten().unsqueeze(0))
-            
-            # Multivariate entropy: H = 0.5 * log(det(2πe * Σ))
-            det_cov = torch.det(cov_matrix + torch.eye(cov_matrix.shape[0], device=cov_matrix.device) * 1e-6)
-            entropy = 0.5 * torch.log(2 * np.pi * np.e * det_cov)
-            
+            temporal_flat = temporal_tensor.flatten()
+
+            # For 1D case, use variance directly
+            if temporal_flat.numel() == 1:
+                entropy = 0.5 * torch.log(2 * np.pi * np.e * torch.var(temporal_flat))
+            else:
+                cov_matrix = torch.cov(temporal_flat.unsqueeze(0))
+
+                # Handle scalar covariance matrix
+                if cov_matrix.dim() == 0:
+                    det_cov = cov_matrix + 1e-6
+                else:
+                    det_cov = torch.det(cov_matrix + torch.eye(cov_matrix.shape[0], device=cov_matrix.device) * 1e-6)
+
+                entropy = 0.5 * torch.log(2 * np.pi * np.e * det_cov)
+
             return entropy
         
         return torch.tensor(0.0, device=z_local.device)
@@ -448,7 +458,7 @@ class MultiComponentEntropy(nn.Module):
             z_pooled = F.pad(z_flat, (0, 64 - len(z_flat)))
 
         # Time step embedding
-        k_embed = self._sinusoidal_embedding(k, 64)
+        k_embed = self._sinusoidal_embedding(k, 64, z_local.device)
 
         # Positional encoding
         pos_enc = torch.tensor([
@@ -457,14 +467,14 @@ class MultiComponentEntropy(nn.Module):
             s / self.config.max_scales
         ], device=z_local.device, dtype=z_local.dtype)
 
-        # Local statistics
-        local_stats = torch.tensor([
+        # Local statistics - compute on device
+        local_stats = torch.stack([
             torch.mean(z_local), torch.std(z_local),
             torch.min(z_local), torch.max(z_local),
             torch.median(z_local), torch.var(z_local),
             torch.norm(z_local), torch.sum(torch.abs(z_local)),
             torch.sum(z_local > 0).float(), torch.sum(z_local < 0).float()
-        ], device=z_local.device, dtype=z_local.dtype)
+        ])
 
         # Concatenate all features
         features = torch.cat([z_pooled, k_embed, pos_enc, local_stats])
@@ -474,11 +484,11 @@ class MultiComponentEntropy(nn.Module):
 
         return weights
     
-    def _sinusoidal_embedding(self, x: int, dim: int) -> torch.Tensor:
+    def _sinusoidal_embedding(self, x: int, dim: int, device: torch.device) -> torch.Tensor:
         """Create sinusoidal positional embedding"""
         half_dim = dim // 2
         emb = np.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
+        emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=device) * -emb)
         emb = x * emb
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=0)
         return emb
