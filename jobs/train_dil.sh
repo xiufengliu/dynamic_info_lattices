@@ -1,113 +1,214 @@
 #!/bin/bash
-#BSUB -J dil_train
-#BSUB -o logs/dil_train_%J.out
-#BSUB -e logs/dil_train_%J.err
-#BSUB -W 24:00
+#BSUB -J kdd_dil[1-10]
+#BSUB -o logs/kdd_dil_%I_%J.out
+#BSUB -e logs/kdd_dil_%I_%J.err
+#BSUB -W 12:00
 #BSUB -q gpuv100
-#BSUB -gpu "num=1"
+#BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -R "rusage[mem=8GB]"
 #BSUB -R "span[hosts=1]"
-#BSUB -n 4
+#BSUB -n 1
 
-# Dynamic Information Lattices Training Job
-# This script trains the DIL model on HPC cluster with LSF
+# KDD Comprehensive Experimental Suite for Dynamic Information Lattices
+# This script runs comprehensive experiments across all 13 datasets with multiple baselines
+#
+# Submitter: Xiufeng Liu (xiuli@dtu.dk) - Senior Researcher
+# Location: Birkerod (outside DTU campus)
+# Fixed memory allocation per DTU HPC support requirements
 
-echo "Starting Dynamic Information Lattices training job..."
+echo "Starting KDD Comprehensive Experimental Suite..."
 echo "Job ID: $LSB_JOBID"
+echo "Job Index: $LSB_JOBINDEX"
 echo "Host: $LSB_HOSTS"
 echo "Start time: $(date)"
+
+# Define reasonable experimental configurations for initial run
+# Start with smaller subset to avoid overwhelming the cluster
+DATASETS=("illness" "exchange_rate" "etth1" "weather" "electricity")
+METHODS=("dil" "dlinear")
+SEQUENCE_LENGTHS=(96)
+PREDICTION_LENGTHS=(24)
+SEEDS=(42)
+
+# Calculate experiment configuration based on job index
+TOTAL_CONFIGS=0
+for dataset in "${DATASETS[@]}"; do
+    for method in "${METHODS[@]}"; do
+        for seq_len in "${SEQUENCE_LENGTHS[@]}"; do
+            for pred_len in "${PREDICTION_LENGTHS[@]}"; do
+                for seed in "${SEEDS[@]}"; do
+                    if [ $pred_len -lt $seq_len ]; then
+                        TOTAL_CONFIGS=$((TOTAL_CONFIGS + 1))
+                    fi
+                done
+            done
+        done
+    done
+done
+
+echo "Total experimental configurations: $TOTAL_CONFIGS"
+
+# Map job index to specific configuration
+CONFIG_INDEX=$((LSB_JOBINDEX - 1))
+if [ $CONFIG_INDEX -ge $TOTAL_CONFIGS ]; then
+    echo "Job index $LSB_JOBINDEX exceeds total configurations $TOTAL_CONFIGS. Exiting."
+    exit 0
+fi
+
+# Find the specific configuration for this job index
+current_index=0
+found=false
+
+for dataset in "${DATASETS[@]}"; do
+    for method in "${METHODS[@]}"; do
+        for seq_len in "${SEQUENCE_LENGTHS[@]}"; do
+            for pred_len in "${PREDICTION_LENGTHS[@]}"; do
+                for seed in "${SEEDS[@]}"; do
+                    if [ $pred_len -lt $seq_len ]; then
+                        if [ $current_index -eq $CONFIG_INDEX ]; then
+                            CURRENT_DATASET=$dataset
+                            CURRENT_METHOD=$method
+                            CURRENT_SEQ_LEN=$seq_len
+                            CURRENT_PRED_LEN=$pred_len
+                            CURRENT_SEED=$seed
+                            found=true
+                            break 5
+                        fi
+                        current_index=$((current_index + 1))
+                    fi
+                done
+            done
+        done
+    done
+done
+
+if [ "$found" = false ]; then
+    echo "Could not find configuration for index $CONFIG_INDEX"
+    exit 1
+fi
+
+echo "Experiment Configuration:"
+echo "  Dataset: $CURRENT_DATASET"
+echo "  Method: $CURRENT_METHOD"
+echo "  Sequence Length: $CURRENT_SEQ_LEN"
+echo "  Prediction Length: $CURRENT_PRED_LEN"
+echo "  Random Seed: $CURRENT_SEED"
 
 # Load required modules
 echo "Loading modules..."
 module load cuda/12.9.1
-module list
 
 # Activate conda environment
 echo "Activating conda environment..."
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate base
+if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
+    source ~/miniconda3/etc/profile.d/conda.sh
+    conda activate base
+elif [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
+    source ~/anaconda3/etc/profile.d/conda.sh
+    conda activate base
+else
+    echo "Conda not found, using system python"
+fi
+
+# Set environment variables
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONPATH=/zhome/bb/9/101964/xiuli/dynamic_info_lattices:$PYTHONPATH
+export PYTHONHASHSEED=$CURRENT_SEED
 
 # Check environment
 echo "Environment check:"
 python --version
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "PYTHONHASHSEED: $PYTHONHASHSEED"
 
-# Check if PyTorch is available, install if needed
-echo "Checking PyTorch installation..."
+# Quick PyTorch check
 python -c "
-try:
-    import torch
-    print(f'PyTorch: {torch.__version__}')
-    print(f'CUDA available: {torch.cuda.is_available()}')
-    if torch.cuda.is_available():
-        print(f'CUDA version: {torch.version.cuda}')
-        print(f'GPU count: {torch.cuda.device_count()}')
-except ImportError:
-    print('PyTorch not found. Installing...')
-    import subprocess
-    import sys
-    result = subprocess.run(['conda', 'install', '-y', 'pytorch', 'torchvision', 'pytorch-cuda=12.1', '-c', 'pytorch', '-c', 'nvidia'],
-                          capture_output=True, text=True)
-    if result.returncode == 0:
-        print('PyTorch installation successful!')
-        import torch
-        print(f'PyTorch: {torch.__version__}')
-        print(f'CUDA available: {torch.cuda.is_available()}')
-    else:
-        print(f'PyTorch installation failed: {result.stderr}')
-        exit(1)
+import torch
+print(f'PyTorch: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'CUDA version: {torch.version.cuda}')
+    print(f'GPU count: {torch.cuda.device_count()}')
+    print(f'Current device: {torch.cuda.current_device()}')
 "
 
 # Navigate to project directory
-cd $LS_SUBCWD
+cd /zhome/bb/9/101964/xiuli/dynamic_info_lattices
 echo "Working directory: $(pwd)"
 
-# Create logs directory if it doesn't exist
+# Create output directories
 mkdir -p logs
+mkdir -p experiments/kdd/$CURRENT_METHOD/$CURRENT_DATASET
 
-# Install project dependencies if needed
+# Install project dependencies
 echo "Installing project dependencies..."
-conda install -y pip
-pip install -e . || echo "Project installation failed, continuing..."
-pip install -r requirements.txt || echo "Requirements installation failed, continuing..."
+pip install -e . --quiet
 
-# Set environment variables for GPU
-export CUDA_VISIBLE_DEVICES=0
+# Determine epochs based on dataset size
+case $CURRENT_DATASET in
+    "illness"|"gefcom2014"|"southern_china")
+        NUM_EPOCHS=100
+        ;;
+    "exchange_rate"|"etth1"|"etth2")
+        NUM_EPOCHS=80
+        ;;
+    "ettm1"|"ettm2"|"weather"|"solar")
+        NUM_EPOCHS=60
+        ;;
+    "ecl"|"electricity"|"traffic")
+        NUM_EPOCHS=50
+        ;;
+    *)
+        NUM_EPOCHS=60
+        ;;
+esac
 
-# Training parameters (modify as needed)
-DATASET=${DATASET:-"etth1"}
-BATCH_SIZE=${BATCH_SIZE:-32}
-LEARNING_RATE=${LEARNING_RATE:-1e-4}
-NUM_EPOCHS=${NUM_EPOCHS:-100}
-SEQUENCE_LENGTH=${SEQUENCE_LENGTH:-96}
-PREDICTION_LENGTH=${PREDICTION_LENGTH:-24}
-
-echo "Training parameters:"
-echo "  Dataset: $DATASET"
-echo "  Batch size: $BATCH_SIZE"
-echo "  Learning rate: $LEARNING_RATE"
+echo "Final training parameters:"
+echo "  Dataset: $CURRENT_DATASET"
+echo "  Method: $CURRENT_METHOD"
+echo "  Sequence length: $CURRENT_SEQ_LEN"
+echo "  Prediction length: $CURRENT_PRED_LEN"
 echo "  Epochs: $NUM_EPOCHS"
-echo "  Sequence length: $SEQUENCE_LENGTH"
-echo "  Prediction length: $PREDICTION_LENGTH"
+echo "  Random seed: $CURRENT_SEED"
 
-# Run training
-echo "Starting training..."
-python examples/train_dil.py \
-    --dataset $DATASET \
-    --batch_size $BATCH_SIZE \
-    --learning_rate $LEARNING_RATE \
-    --num_epochs $NUM_EPOCHS \
-    --sequence_length $SEQUENCE_LENGTH \
-    --prediction_length $PREDICTION_LENGTH \
-    --device cuda \
-    --output_dir ./experiments/cluster_run_$LSB_JOBID \
-    --seed 42
-
-# Check if training completed successfully
-if [ $? -eq 0 ]; then
-    echo "Training completed successfully!"
+# Run experiment based on method
+echo "Starting experiment..."
+if [ "$CURRENT_METHOD" = "dil" ]; then
+    # Run our DIL method
+    python train_multi_dataset.py \
+        --dataset $CURRENT_DATASET \
+        --sequence_length $CURRENT_SEQ_LEN \
+        --prediction_length $CURRENT_PRED_LEN \
+        --epochs $NUM_EPOCHS \
+        --device cuda \
+        --output_dir experiments/kdd/$CURRENT_METHOD/$CURRENT_DATASET \
+        --log_dir logs \
+        --save_every 20 \
+        --eval_every 10
 else
-    echo "Training failed with exit code $?"
+    # Run baseline method
+    python baselines/run_baseline.py \
+        --method $CURRENT_METHOD \
+        --dataset $CURRENT_DATASET \
+        --sequence_length $CURRENT_SEQ_LEN \
+        --prediction_length $CURRENT_PRED_LEN \
+        --epochs $NUM_EPOCHS \
+        --seed $CURRENT_SEED \
+        --fold 0 \
+        --output_dir experiments/kdd/$CURRENT_METHOD/$CURRENT_DATASET \
+        --device cuda
+fi
+
+# Check if experiment completed successfully
+EXPERIMENT_EXIT_CODE=$?
+if [ $EXPERIMENT_EXIT_CODE -eq 0 ]; then
+    echo "Experiment completed successfully!"
+    echo "Results saved to: experiments/kdd/$CURRENT_METHOD/$CURRENT_DATASET"
+else
+    echo "Experiment failed with exit code $EXPERIMENT_EXIT_CODE"
+    echo "Check logs for details: logs/kdd_dil_${LSB_JOBINDEX}_${LSB_JOBID}.err"
 fi
 
 echo "End time: $(date)"
-echo "Job completed."
+echo "KDD Experiment completed."
+echo "Configuration: $CURRENT_METHOD on $CURRENT_DATASET (seq=$CURRENT_SEQ_LEN, pred=$CURRENT_PRED_LEN, seed=$CURRENT_SEED)"

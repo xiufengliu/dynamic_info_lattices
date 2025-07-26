@@ -1,7 +1,7 @@
 #!/bin/bash
 # Monitor Dynamic Information Lattices training job
 
-JOB_ID=25710198
+JOB_ID=25713669
 
 echo "Monitoring DIL Training Job: $JOB_ID"
 echo "=================================="
