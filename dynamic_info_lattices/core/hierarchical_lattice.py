@@ -68,14 +68,26 @@ class HierarchicalLattice(nn.Module):
         for s in range(self.max_scales + 1):
             stride_t = 2 ** s
             stride_f = 2 ** s
-            
+
             scale_nodes = []
-            
-            # Generate nodes for this scale
-            for t in range(0, L, stride_t):
+
+            # Generate nodes for this scale - use proper coordinate system
+            # At scale s, we have fewer nodes with larger regions
+            num_t_nodes = max(1, L // stride_t)
+            num_f_nodes = max(1, F // stride_f) if use_frequency else 1
+
+            for t_idx in range(num_t_nodes):
+                # Convert index to spatial coordinate
+                t = t_idx * stride_t
+                if t >= L:  # Skip if beyond bounds
+                    continue
+
                 if use_frequency:
                     # 2D case: use both t and f dimensions
-                    for f in range(0, F, stride_f):
+                    for f_idx in range(num_f_nodes):
+                        f = f_idx * stride_f
+                        if f >= F:  # Skip if beyond bounds
+                            continue
                         node = (t, f, s)
                         scale_nodes.append(node)
                         all_nodes.append(node)
@@ -292,22 +304,26 @@ class HierarchicalLattice(nn.Module):
         return parent_child_map
     
     def _build_coordinate_map(self, nodes: List[Tuple[int, int, int]]) -> Dict:
-        """Build mapping from nodes to their spatial coordinates"""
+        """Build mapping from nodes to their spatial coordinates
+
+        FIXED: Use consistent coordinate system
+        """
         coordinate_map = {}
-        
+
         for t, f, s in nodes:
             scale_factor = 2 ** s
-            t_start = t * scale_factor
-            t_end = (t + 1) * scale_factor
-            f_start = f * scale_factor
-            f_end = (f + 1) * scale_factor
-            
+            # t,f are already spatial coordinates, define region based on scale
+            t_start = t
+            t_end = t + scale_factor
+            f_start = f
+            f_end = f + scale_factor
+
             coordinate_map[(t, f, s)] = {
                 't_range': (t_start, t_end),
                 'f_range': (f_start, f_end),
                 'scale_factor': scale_factor
             }
-        
+
         return coordinate_map
     
     def _compute_entropy_gradients(
@@ -414,14 +430,22 @@ class HierarchicalLattice(nn.Module):
         f: int,
         s: int
     ) -> torch.Tensor:
-        """Extract spatial region corresponding to lattice node"""
+        """Extract spatial region corresponding to lattice node
+
+        FIXED: Use consistent coordinate system - t,f are spatial positions
+        """
         scale_factor = 2 ** s
-        t_start = t * scale_factor
-        t_end = min((t + 1) * scale_factor, z.shape[1])
-        f_start = f * scale_factor
-        f_end = min((f + 1) * scale_factor, z.shape[2])
-        
-        return z[:, t_start:t_end, f_start:f_end]
+
+        # t,f are already spatial coordinates, define region size based on scale
+        t_start = t
+        t_end = min(t + scale_factor, z.shape[1])
+
+        if len(z.shape) >= 3:
+            f_start = f
+            f_end = min(f + scale_factor, z.shape[2])
+            return z[:, t_start:t_end, f_start:f_end]
+        else:
+            return z[:, t_start:t_end]
     
     def _interpolate_region(
         self,

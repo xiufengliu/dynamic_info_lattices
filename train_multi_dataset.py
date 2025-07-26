@@ -45,13 +45,19 @@ def get_dataset_config(dataset_name: str, base_config: DILConfig) -> DILConfig:
     """Get dataset-specific configuration adjustments"""
     dataset_info = get_dataset_info(dataset_name)
     
-    # Create a copy of the base config
+    # Create a copy of the base config with simplified settings for debugging
     config = DILConfig()
-    
+
     # Update config based on dataset characteristics
     config.input_dim = dataset_info['num_series']
     config.sequence_length = base_config.sequence_length
     config.prediction_length = base_config.prediction_length
+
+    # Disable problematic features for debugging
+    config.max_scales = 1  # Reduced to avoid scale synchronization issues
+    config.inference_steps = 5  # Reduced for faster debugging
+    config.adaptive_guidance = False  # Disabled to avoid guidance computation issues
+    config.cross_scale_sync = False  # Disabled to avoid interpolation issues
     
     # Adjust model size based on dataset complexity
     if dataset_info['num_series'] > 500:  # Large datasets like traffic

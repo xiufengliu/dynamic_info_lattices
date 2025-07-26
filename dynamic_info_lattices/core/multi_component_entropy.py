@@ -139,14 +139,22 @@ class MultiComponentEntropy(nn.Module):
         f: int,
         s: int
     ) -> torch.Tensor:
-        """Extract local region from global tensor based on lattice coordinates"""
+        """Extract local region from global tensor based on lattice coordinates
+
+        FIXED: Extract temporal region but preserve ALL channels for proper ScoreNetwork input
+        """
         scale_factor = 2 ** s
-        t_start = t * scale_factor
-        t_end = min((t + 1) * scale_factor, z.shape[1])
-        f_start = f * scale_factor
-        f_end = min((f + 1) * scale_factor, z.shape[2])
-        
-        return z[:, t_start:t_end, f_start:f_end]
+
+        # Extract temporal region based on scale
+        t_start = max(0, min(t, z.shape[1] - 1))
+        t_end = max(t_start + 1, min(t + scale_factor, z.shape[1]))
+
+        if len(z.shape) == 3:  # [batch, length, channels]
+            # Always preserve ALL channels - don't slice the channel dimension
+            # This ensures ScoreNetwork gets the expected number of input channels
+            return z[:, t_start:t_end, :]
+        else:  # [batch, length]
+            return z[:, t_start:t_end]
     
     def _estimate_score_entropy(
         self,
@@ -215,30 +223,7 @@ class MultiComponentEntropy(nn.Module):
 
         return torch.mean(entropy)
 
-    def _extract_local_region(
-        self,
-        tensor: torch.Tensor,
-        t: int,
-        f: int,
-        s: int
-    ) -> torch.Tensor:
-        """Extract local region from tensor based on lattice coordinates"""
-        scale_factor = 2 ** s
 
-        # Handle 1D vs 2D data
-        if len(tensor.shape) == 2:  # [batch, length]
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, tensor.shape[1])
-            return tensor[:, t_start:t_end]
-        elif len(tensor.shape) == 3:  # [batch, length, channels]
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, tensor.shape[1])
-            return tensor[:, t_start:t_end, :]
-        else:
-            # For higher dimensional tensors, extract time dimension
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, tensor.shape[1])
-            return tensor[:, t_start:t_end, ...]
     
     def _estimate_guidance_entropy(
         self,

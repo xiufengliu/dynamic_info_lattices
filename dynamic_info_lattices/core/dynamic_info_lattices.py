@@ -183,8 +183,9 @@ class DynamicInfoLattices(nn.Module):
                 z_k, k, k_prev, selected_nodes, y_obs, mask, entropy_map, lattice_k_prev
             )
 
-            # Phase 5: Cross-Scale Synchronization
-            z_k_prev = self._synchronize_scales(z_k_prev, lattice_k_prev)
+            # Phase 5: Cross-Scale Synchronization (disabled for debugging)
+            if self.config.cross_scale_sync:
+                z_k_prev = self._synchronize_scales(z_k_prev, lattice_k_prev)
 
             # Update state for next iteration
             z_k = z_k_prev
@@ -372,17 +373,21 @@ class DynamicInfoLattices(nn.Module):
         f: int,
         s: int
     ) -> torch.Tensor:
-        """Compute guidance signal for self-guidance"""
-        # Implement guidance computation based on observation likelihood
-        # This is a simplified version - full implementation would include
-        # proper gradient computation through the observation model
+        """Compute guidance signal for self-guidance
+
+        FIXED: Extract corresponding local regions from y_obs and mask
+        """
         guidance = torch.zeros_like(z)
-        
+
+        # Extract corresponding local regions from observations and mask
+        y_obs_local = self._extract_local_region(y_obs, t, f, s)
+        mask_local = self._extract_local_region(mask, t, f, s)
+
         # Simple guidance based on observation error
-        if mask is not None:
-            obs_error = (z - y_obs) * mask
+        if mask_local is not None:
+            obs_error = (z - y_obs_local) * mask_local
             guidance = -obs_error / (torch.var(obs_error) + 1e-8)
-        
+
         return guidance
     
     def _extract_local_region(
@@ -392,25 +397,21 @@ class DynamicInfoLattices(nn.Module):
         f: int,
         s: int
     ) -> torch.Tensor:
-        """Extract local region from global tensor based on lattice coordinates"""
+        """Extract local region from global tensor based on lattice coordinates
+
+        FIXED: Use consistent coordinate system with proper bounds checking
+        """
         scale_factor = 2 ** s
 
-        # Handle 1D vs 2D data
-        # For time series data with shape (seq_len, channels), treat as 1D along sequence dimension
-        if len(self.data_shape) == 2 and len(z.shape) == 3:  # Time series: [batch, seq_len, channels]
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, z.shape[1])
-            return z[:, t_start:t_end, :]  # Keep all channels
-        elif len(self.data_shape) == 1:  # Pure 1D time series
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, z.shape[1])
+        # Extract temporal region based on scale, preserve all channels
+        t_start = max(0, min(t, z.shape[1] - 1))
+        t_end = max(t_start + 1, min(t + scale_factor, z.shape[1]))
+
+        if len(z.shape) == 3:  # [batch, length, channels]
+            # Always preserve ALL channels for proper ScoreNetwork input
+            return z[:, t_start:t_end, :]
+        else:  # [batch, length]
             return z[:, t_start:t_end]
-        else:  # True 2D spatial data
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, z.shape[1])
-            f_start = f * scale_factor
-            f_end = min((f + 1) * scale_factor, z.shape[2])
-            return z[:, t_start:t_end, f_start:f_end]
 
     def _update_local_region(
         self,
