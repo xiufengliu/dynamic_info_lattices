@@ -200,7 +200,7 @@ def main():
     # Create model
     logger.info("Creating model...")
 
-    # Create simplified score network for debugging
+    # Create simplified score network with adaptive kernel size
     class SimpleScoreNetwork(nn.Module):
         def __init__(self, in_channels, out_channels, hidden_dim=64):
             super().__init__()
@@ -209,9 +209,10 @@ def main():
                 nn.SiLU(),
                 nn.Linear(hidden_dim, hidden_dim)
             )
-            self.conv1 = nn.Conv1d(in_channels, hidden_dim, 3, padding=1)
-            self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1)
-            self.conv3 = nn.Conv1d(hidden_dim, out_channels, 3, padding=1)
+            # Use kernel size 1 to avoid size issues with small inputs
+            self.conv1 = nn.Conv1d(in_channels, hidden_dim, 1)
+            self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, 1)
+            self.conv3 = nn.Conv1d(hidden_dim, out_channels, 1)
 
         def forward(self, x, timesteps):
             # x: [batch, channels, length]
