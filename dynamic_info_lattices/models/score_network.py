@@ -208,6 +208,13 @@ class UpBlock(nn.Module):
             self.upsample = None
     
     def forward(self, x: torch.Tensor, skip: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
+        # Handle spatial dimension mismatch between x and skip
+        if x.shape[-1] != skip.shape[-1]:
+            # Interpolate skip to match x's spatial dimension
+            skip = torch.nn.functional.interpolate(
+                skip, size=x.shape[-1], mode='linear', align_corners=False
+            )
+
         x = torch.cat([x, skip], dim=1)
         
         for layer in self.layers:
@@ -335,9 +342,12 @@ class ScoreNetwork(nn.Module):
                 )
                 ch = out_ch
         
-        # Output projection
+        # Output projection with adaptive GroupNorm
+        groups = min(8, ch)
+        while ch % groups != 0 and groups > 1:
+            groups -= 1
         self.output_proj = nn.Sequential(
-            nn.GroupNorm(8, ch),
+            nn.GroupNorm(groups, ch),
             nn.SiLU(),
             nn.Conv1d(ch, out_channels, 3, padding=1)
         )

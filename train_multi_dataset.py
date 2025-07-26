@@ -200,14 +200,34 @@ def main():
     # Create model
     logger.info("Creating model...")
 
-    # Create score network
-    score_network = ScoreNetwork(
+    # Create simplified score network for debugging
+    class SimpleScoreNetwork(nn.Module):
+        def __init__(self, in_channels, out_channels, hidden_dim=64):
+            super().__init__()
+            self.time_embed = nn.Sequential(
+                nn.Linear(1, hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            self.conv1 = nn.Conv1d(in_channels, hidden_dim, 3, padding=1)
+            self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1)
+            self.conv3 = nn.Conv1d(hidden_dim, out_channels, 3, padding=1)
+
+        def forward(self, x, timesteps):
+            # x: [batch, channels, length]
+            # timesteps: [batch]
+            time_emb = self.time_embed(timesteps.float().unsqueeze(-1))  # [batch, hidden_dim]
+
+            h = torch.relu(self.conv1(x))
+            h = h + time_emb.unsqueeze(-1)  # Add time embedding
+            h = torch.relu(self.conv2(h))
+            h = self.conv3(h)
+            return h
+
+    score_network = SimpleScoreNetwork(
         in_channels=config.input_dim,
         out_channels=config.input_dim,
-        model_channels=config.hidden_dim,
-        num_res_blocks=2,
-        attention_resolutions=(1, 2, 4),
-        dropout=0.1
+        hidden_dim=config.hidden_dim
     )
 
     # Data shape for the model
@@ -244,18 +264,15 @@ def main():
 
             optimizer.zero_grad()
 
-            # Simple forward pass using the score network with dummy timesteps
+            # Forward pass using the DIL model properly
             try:
-                batch_size = inputs.shape[0]
-                # Create dummy timesteps (required by ScoreNetwork)
-                timesteps = torch.randint(0, 1000, (batch_size,), device=device)
+                # Create a mask for the input (all observed for training)
+                mask = torch.ones_like(inputs, dtype=torch.bool, device=device)
 
-                # Use score network with timesteps
-                inputs_transposed = inputs.transpose(1, 2)  # [B, C, T]
-                outputs_transposed = model.score_network(inputs_transposed, timesteps)
-                outputs = outputs_transposed.transpose(1, 2)  # [B, T, C]
+                # Use the DIL model's forward method which handles the score network correctly
+                outputs = model(inputs, mask)
 
-                # Take only the prediction length portion
+                # Ensure output shape matches target shape
                 if outputs.shape[1] > targets.shape[1]:
                     outputs = outputs[:, -targets.shape[1]:, :]
                 elif outputs.shape[1] < targets.shape[1]:
@@ -287,14 +304,11 @@ def main():
                 inputs, targets = inputs.to(device), targets.to(device)
 
                 try:
-                    batch_size = inputs.shape[0]
-                    # Create dummy timesteps for evaluation
-                    timesteps = torch.randint(0, 1000, (batch_size,), device=device)
+                    # Create a mask for the input (all observed for evaluation)
+                    mask = torch.ones_like(inputs, dtype=torch.bool, device=device)
 
-                    # Use score network with timesteps
-                    inputs_transposed = inputs.transpose(1, 2)  # [B, C, T]
-                    outputs_transposed = model.score_network(inputs_transposed, timesteps)
-                    outputs = outputs_transposed.transpose(1, 2)  # [B, T, C]
+                    # Use the DIL model's forward method
+                    outputs = model(inputs, mask)
 
                     # Take only the prediction length portion
                     if outputs.shape[1] > targets.shape[1]:

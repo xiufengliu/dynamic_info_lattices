@@ -173,14 +173,28 @@ class MultiComponentEntropy(nn.Module):
 
         with torch.no_grad():
             for _ in range(self.num_mc_samples):
-                # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
-                z_local_transposed = z_local.transpose(-2, -1)
+                # Ensure proper shape for ScoreNetwork: [batch, channels, length]
+                if len(z_local.shape) == 3:
+                    # z_local is [batch, time, features] -> reshape to [batch, features, time]
+                    z_local_transposed = z_local.transpose(-2, -1)
+                else:
+                    # Handle other cases by flattening and reshaping appropriately
+                    batch_size = z_local.shape[0]
+                    # Flatten spatial dimensions and treat as sequence
+                    z_local_flat = z_local.view(batch_size, -1)
+                    # Add channel dimension: [batch, length] -> [batch, 1, length]
+                    z_local_transposed = z_local_flat.unsqueeze(1)
 
                 # Get score function prediction with dropout enabled
                 score_sample = score_network(z_local_transposed, timestep_tensor)
 
-                # Transpose back: [batch, channels, length] -> [batch, length, channels]
-                score_sample = score_sample.transpose(-2, -1)
+                # Transpose back to match expected output format
+                if len(z_local.shape) == 3:
+                    score_sample = score_sample.transpose(-2, -1)
+                else:
+                    # Reshape back to original spatial structure if needed
+                    score_sample = score_sample.squeeze(1).view_as(z_local_flat)
+
                 score_samples.append(score_sample)
 
         # Restore original training state
