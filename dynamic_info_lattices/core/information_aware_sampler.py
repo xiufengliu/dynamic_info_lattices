@@ -76,7 +76,16 @@ class InformationAwareSampler(nn.Module):
             # Normalize probabilities within stratum
             stratum_indices = [active_nodes.index(node) for node in stratum_nodes]
             stratum_probs = probabilities[stratum_indices]
-            stratum_probs = stratum_probs / (torch.sum(stratum_probs) + 1e-8)
+
+            # Ensure stratum probabilities are valid
+            stratum_probs = torch.clamp(stratum_probs, min=1e-8)
+            stratum_sum = torch.sum(stratum_probs)
+
+            if stratum_sum <= 1e-8:
+                # Fallback to uniform distribution within stratum
+                stratum_probs = torch.ones_like(stratum_probs) / len(stratum_probs)
+            else:
+                stratum_probs = stratum_probs / stratum_sum
             
             # Sample from stratum
             stratum_selected = self._multinomial_sample(
@@ -137,11 +146,27 @@ class InformationAwareSampler(nn.Module):
             delta_s = 0.1  # Scale adjustment factor
             beta_s = self.config.temperature * (1 + delta_s * s / max_scale)
 
+            # Clamp entropy values to prevent overflow/underflow
+            entropy_val = torch.clamp(entropy_map[i], min=-10.0, max=10.0)
+
             # Compute probability according to Equation (4)
-            scale_adjusted_probs[i] = torch.exp(beta_s * entropy_map[i])
+            scale_adjusted_probs[i] = torch.exp(beta_s * entropy_val)
+
+        # Ensure probabilities are valid (positive and finite)
+        scale_adjusted_probs = torch.clamp(scale_adjusted_probs, min=1e-8)
+        scale_adjusted_probs = torch.where(
+            torch.isfinite(scale_adjusted_probs),
+            scale_adjusted_probs,
+            torch.ones_like(scale_adjusted_probs) * 1e-8
+        )
 
         # Normalize to probability distribution (denominator in Equation 4)
-        probabilities = scale_adjusted_probs / (torch.sum(scale_adjusted_probs) + 1e-8)
+        prob_sum = torch.sum(scale_adjusted_probs)
+        if prob_sum <= 1e-8:
+            # Fallback to uniform distribution if all probabilities are too small
+            probabilities = torch.ones_like(scale_adjusted_probs) / len(scale_adjusted_probs)
+        else:
+            probabilities = scale_adjusted_probs / prob_sum
 
         return probabilities
     
@@ -194,20 +219,36 @@ class InformationAwareSampler(nn.Module):
         probabilities: torch.Tensor,
         budget: int
     ) -> List[Tuple[int, int, int]]:
-        """Sample nodes using multinomial distribution"""
+        """Sample nodes using multinomial distribution with robust validation"""
         if len(nodes) == 0 or budget <= 0:
             return []
-        
+
         budget = min(budget, len(nodes))
-        
-        # Sample without replacement
-        selected_indices = torch.multinomial(
-            probabilities, 
-            num_samples=budget, 
-            replacement=False
-        )
-        
-        selected_nodes = [nodes[idx] for idx in selected_indices]
+
+        # Validate probabilities before multinomial sampling
+        probabilities = torch.clamp(probabilities, min=1e-8)
+        prob_sum = torch.sum(probabilities)
+
+        if prob_sum <= 1e-8 or not torch.isfinite(prob_sum):
+            # Fallback to uniform sampling if probabilities are invalid
+            indices = torch.randperm(len(nodes))[:budget]
+            selected_nodes = [nodes[idx] for idx in indices]
+        else:
+            # Normalize probabilities
+            probabilities = probabilities / prob_sum
+
+            # Sample without replacement
+            try:
+                selected_indices = torch.multinomial(
+                    probabilities,
+                    num_samples=budget,
+                    replacement=False
+                )
+                selected_nodes = [nodes[idx] for idx in selected_indices]
+            except RuntimeError:
+                # Fallback to uniform sampling if multinomial fails
+                indices = torch.randperm(len(nodes))[:budget]
+                selected_nodes = [nodes[idx] for idx in indices]
         
         return selected_nodes
 
