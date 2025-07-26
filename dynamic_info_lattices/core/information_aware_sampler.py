@@ -158,8 +158,8 @@ class InformationAwareSampler(nn.Module):
         # Determine entropy quantiles for stratification
         valid_entropies = entropy_map[:len(active_nodes)]
         quantiles = torch.quantile(
-            valid_entropies, 
-            torch.linspace(0, 1, num_strata + 1)
+            valid_entropies,
+            torch.linspace(0, 1, num_strata + 1, device=valid_entropies.device)
         )
         
         strata = []
