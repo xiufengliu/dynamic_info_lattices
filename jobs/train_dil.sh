@@ -114,6 +114,7 @@ fi
 export CUDA_VISIBLE_DEVICES=0
 export PYTHONPATH=/zhome/bb/9/101964/xiuli/dynamic_info_lattices:$PYTHONPATH
 export PYTHONHASHSEED=$CURRENT_SEED
+export CUDA_LAUNCH_BLOCKING=1
 
 # Check environment
 echo "Environment check:"

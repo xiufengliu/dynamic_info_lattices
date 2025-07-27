@@ -77,10 +77,18 @@ class HierarchicalLattice(nn.Module):
             num_f_nodes = max(1, F // stride_f) if use_frequency else 1
 
             for t_idx in range(num_t_nodes):
-                # Convert index to spatial coordinate
+                # Convert index to spatial coordinate with proper bounds checking
                 t = t_idx * stride_t
+                # Ensure t coordinate doesn't exceed tensor bounds
                 if t >= L:  # Skip if beyond bounds
                     continue
+                # Additional safety: ensure t + scale_factor doesn't exceed bounds
+                scale_factor = 2 ** s
+                if t + scale_factor > L:
+                    # Adjust t to fit within bounds
+                    t = max(0, L - scale_factor)
+                    if t < 0:  # If scale_factor > L, use the entire sequence
+                        t = 0
 
                 if use_frequency:
                     # 2D case: use both t and f dimensions
@@ -88,6 +96,11 @@ class HierarchicalLattice(nn.Module):
                         f = f_idx * stride_f
                         if f >= F:  # Skip if beyond bounds
                             continue
+                        # Additional safety for frequency dimension
+                        if f + scale_factor > F:
+                            f = max(0, F - scale_factor)
+                            if f < 0:
+                                f = 0
                         node = (t, f, s)
                         scale_nodes.append(node)
                         all_nodes.append(node)
@@ -306,16 +319,17 @@ class HierarchicalLattice(nn.Module):
     def _build_coordinate_map(self, nodes: List[Tuple[int, int, int]]) -> Dict:
         """Build mapping from nodes to their spatial coordinates
 
-        FIXED: Use consistent coordinate system
+        FIXED: Use consistent coordinate system with bounds checking
         """
         coordinate_map = {}
 
         for t, f, s in nodes:
             scale_factor = 2 ** s
             # t,f are already spatial coordinates, define region based on scale
-            t_start = t
+            # Add bounds checking to ensure coordinates are valid
+            t_start = max(0, t)
             t_end = t + scale_factor
-            f_start = f
+            f_start = max(0, f)
             f_end = f + scale_factor
 
             coordinate_map[(t, f, s)] = {
