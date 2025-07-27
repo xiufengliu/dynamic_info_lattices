@@ -335,7 +335,8 @@ class DynamicInfoLattices(nn.Module):
         lattice: Dict
     ) -> torch.Tensor:
         """Perform multi-scale updates with adaptive solvers"""
-        z_k_prev = z_k.clone()
+        # Use z_k directly to preserve gradient flow
+        z_k_prev = z_k
         active_nodes = lattice['active_nodes']
 
         # Process selected nodes in order of decreasing entropy (most uncertain first)
@@ -448,31 +449,31 @@ class DynamicInfoLattices(nn.Module):
         # Validate indices before slicing with strict checks
         if t_start < 0 or t_end > seq_len or t_start >= t_end or t_start >= seq_len or t_end <= 0:
             logger.error(f"Invalid slice indices: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
-            # Return a safe fallback instead of crashing
+            # Return a safe fallback instead of crashing (preserve gradients)
             if len(z.shape) == 3:
-                return z[:, :1, :].clone()  # Return first time step as fallback
+                return z[:, :1, :]  # Return first time step as fallback
             else:
-                return z[:, :1].clone()
+                return z[:, :1]
 
         # CUDA-safe tensor slicing with explicit bounds
         try:
             if len(z.shape) == 3:  # [batch, length, channels]
-                # Use explicit indexing to avoid CUDA index issues
-                result = z[:, t_start:t_end, :].clone()
+                # Use explicit indexing to avoid CUDA index issues (preserve gradients)
+                result = z[:, t_start:t_end, :]
                 logger.debug(f"_extract_local_region result shape: {result.shape}")
                 return result
             else:  # [batch, length]
-                result = z[:, t_start:t_end].clone()
+                result = z[:, t_start:t_end]
                 logger.debug(f"_extract_local_region result shape: {result.shape}")
                 return result
         except Exception as e:
             logger.error(f"CUDA indexing error in _extract_local_region: {e}")
             logger.error(f"Tensor shape: {z.shape}, indices: [{t_start}:{t_end}]")
-            # Return safe fallback
+            # Return safe fallback (preserve gradients)
             if len(z.shape) == 3:
-                return z[:, :1, :].clone()
+                return z[:, :1, :]
             else:
-                return z[:, :1].clone()
+                return z[:, :1]
 
     def _update_local_region(
         self,
@@ -483,7 +484,8 @@ class DynamicInfoLattices(nn.Module):
         s: int
     ) -> torch.Tensor:
         """Update local region in global tensor"""
-        z_updated = z_global.clone()
+        # Use z_global directly to preserve gradient flow
+        z_updated = z_global
         scale_factor = 2 ** s
         seq_len = z_global.shape[1]
 

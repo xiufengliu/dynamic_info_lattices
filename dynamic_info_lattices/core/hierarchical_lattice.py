@@ -332,7 +332,8 @@ class HierarchicalLattice(nn.Module):
     ) -> torch.Tensor:
         """Synchronize values across different scales to maintain consistency"""
         # Implement cross-scale synchronization using interpolation
-        synchronized_z = z.clone()
+        # Use z directly to preserve gradient flow
+        synchronized_z = z
         
         hierarchy = lattice['hierarchy']
         
@@ -618,7 +619,8 @@ class HierarchicalLattice(nn.Module):
         s: int
     ) -> torch.Tensor:
         """Update spatial region in global tensor"""
-        z_updated = z.clone()
+        # Use z directly to preserve gradient flow
+        z_updated = z
         
         scale_factor = 2 ** s
         t_start = t * scale_factor
