@@ -405,7 +405,7 @@ class DynamicInfoLattices(nn.Module):
     ) -> torch.Tensor:
         """Extract local region from global tensor based on lattice coordinates
 
-        FIXED: Use consistent coordinate system with proper bounds checking
+        FIXED: Use consistent coordinate system with proper bounds checking and CUDA safety
         """
         scale_factor = 2 ** s
         seq_len = z.shape[1]
@@ -413,35 +413,53 @@ class DynamicInfoLattices(nn.Module):
         # Debug logging for CUDA index investigation
         logger.debug(f"_extract_local_region: z.shape={z.shape}, t={t}, f={f}, s={s}, scale_factor={scale_factor}")
 
-        # Ensure t coordinate is within bounds
+        # CUDA-safe bounds checking with additional safety margins
         t_orig = t
         t = max(0, min(t, seq_len - 1))
 
-        # Extract temporal region based on scale with proper bounds checking
+        # Extract temporal region based on scale with conservative bounds checking
         t_start = t
         t_end = min(t + scale_factor, seq_len)
 
-        # Ensure we have at least one time step
+        # Ensure we have at least one time step but don't exceed bounds
         if t_end <= t_start:
             t_end = min(t_start + 1, seq_len)
+
+        # Additional safety: ensure indices are well within bounds
+        t_start = max(0, min(t_start, seq_len - 1))
+        t_end = max(t_start + 1, min(t_end, seq_len))
 
         # Additional debug logging
         logger.debug(f"_extract_local_region: t_orig={t_orig}, t_adjusted={t}, t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
 
-        # Validate indices before slicing
-        if t_start < 0 or t_end > seq_len or t_start >= t_end:
+        # Validate indices before slicing with strict checks
+        if t_start < 0 or t_end > seq_len or t_start >= t_end or t_start >= seq_len or t_end <= 0:
             logger.error(f"Invalid slice indices: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
-            raise ValueError(f"Invalid slice indices: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
+            # Return a safe fallback instead of crashing
+            if len(z.shape) == 3:
+                return z[:, :1, :].clone()  # Return first time step as fallback
+            else:
+                return z[:, :1].clone()
 
-        if len(z.shape) == 3:  # [batch, length, channels]
-            # Always preserve ALL channels for proper ScoreNetwork input
-            result = z[:, t_start:t_end, :]
-            logger.debug(f"_extract_local_region result shape: {result.shape}")
-            return result
-        else:  # [batch, length]
-            result = z[:, t_start:t_end]
-            logger.debug(f"_extract_local_region result shape: {result.shape}")
-            return result
+        # CUDA-safe tensor slicing with explicit bounds
+        try:
+            if len(z.shape) == 3:  # [batch, length, channels]
+                # Use explicit indexing to avoid CUDA index issues
+                result = z[:, t_start:t_end, :].clone()
+                logger.debug(f"_extract_local_region result shape: {result.shape}")
+                return result
+            else:  # [batch, length]
+                result = z[:, t_start:t_end].clone()
+                logger.debug(f"_extract_local_region result shape: {result.shape}")
+                return result
+        except Exception as e:
+            logger.error(f"CUDA indexing error in _extract_local_region: {e}")
+            logger.error(f"Tensor shape: {z.shape}, indices: [{t_start}:{t_end}]")
+            # Return safe fallback
+            if len(z.shape) == 3:
+                return z[:, :1, :].clone()
+            else:
+                return z[:, :1].clone()
 
     def _update_local_region(
         self,

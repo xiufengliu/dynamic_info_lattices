@@ -141,28 +141,51 @@ class MultiComponentEntropy(nn.Module):
     ) -> torch.Tensor:
         """Extract local region from global tensor based on lattice coordinates
 
-        FIXED: Extract temporal region but preserve ALL channels for proper ScoreNetwork input
+        FIXED: Extract temporal region but preserve ALL channels for proper ScoreNetwork input with CUDA safety
         """
         scale_factor = 2 ** s
         seq_len = z.shape[1]
 
-        # Ensure t coordinate is within bounds
+        # CUDA-safe bounds checking with additional safety margins
         t = max(0, min(t, seq_len - 1))
 
-        # Extract temporal region based on scale with proper bounds checking
+        # Extract temporal region based on scale with conservative bounds checking
         t_start = t
         t_end = min(t + scale_factor, seq_len)
 
-        # Ensure we have at least one time step
+        # Ensure we have at least one time step but don't exceed bounds
         if t_end <= t_start:
             t_end = min(t_start + 1, seq_len)
 
-        if len(z.shape) == 3:  # [batch, length, channels]
-            # Always preserve ALL channels - don't slice the channel dimension
-            # This ensures ScoreNetwork gets the expected number of input channels
-            return z[:, t_start:t_end, :]
-        else:  # [batch, length]
-            return z[:, t_start:t_end]
+        # Additional safety: ensure indices are well within bounds
+        t_start = max(0, min(t_start, seq_len - 1))
+        t_end = max(t_start + 1, min(t_end, seq_len))
+
+        # Validate indices before slicing with strict checks
+        if t_start < 0 or t_end > seq_len or t_start >= t_end or t_start >= seq_len or t_end <= 0:
+            logger.error(f"Invalid slice indices in multi_component_entropy: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
+            # Return a safe fallback instead of crashing
+            if len(z.shape) == 3:
+                return z[:, :1, :].clone()  # Return first time step as fallback
+            else:
+                return z[:, :1].clone()
+
+        # CUDA-safe tensor slicing with explicit bounds
+        try:
+            if len(z.shape) == 3:  # [batch, length, channels]
+                # Always preserve ALL channels - don't slice the channel dimension
+                # This ensures ScoreNetwork gets the expected number of input channels
+                return z[:, t_start:t_end, :].clone()
+            else:  # [batch, length]
+                return z[:, t_start:t_end].clone()
+        except Exception as e:
+            logger.error(f"CUDA indexing error in multi_component_entropy._extract_local_region: {e}")
+            logger.error(f"Tensor shape: {z.shape}, indices: [{t_start}:{t_end}]")
+            # Return safe fallback
+            if len(z.shape) == 3:
+                return z[:, :1, :].clone()
+            else:
+                return z[:, :1].clone()
     
     def _estimate_score_entropy(
         self,

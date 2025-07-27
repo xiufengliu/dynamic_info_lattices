@@ -79,16 +79,22 @@ class HierarchicalLattice(nn.Module):
             for t_idx in range(num_t_nodes):
                 # Convert index to spatial coordinate with proper bounds checking
                 t = t_idx * stride_t
-                # Ensure t coordinate doesn't exceed tensor bounds
-                if t >= L:  # Skip if beyond bounds
+
+                # CUDA-safe coordinate validation with strict bounds checking
+                if t >= L or t < 0:  # Skip if beyond bounds
                     continue
+
                 # Additional safety: ensure t + scale_factor doesn't exceed bounds
                 scale_factor = 2 ** s
                 if t + scale_factor > L:
-                    # Adjust t to fit within bounds
+                    # Adjust t to fit within bounds, but ensure it's still valid
                     t = max(0, L - scale_factor)
-                    if t < 0:  # If scale_factor > L, use the entire sequence
-                        t = 0
+                    if t < 0 or t >= L:  # If scale_factor > L, skip this node
+                        continue
+
+                # Final validation: ensure t is within valid range
+                if t < 0 or t >= L:
+                    continue
 
                 if use_frequency:
                     # 2D case: use both t and f dimensions

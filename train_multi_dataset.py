@@ -22,13 +22,41 @@ from dynamic_info_lattices.data.processed_datasets import create_dataset, get_av
 from dynamic_info_lattices.training.trainer import DILTrainer
 
 
+def validate_tensor_dimensions(data_loader, dataset_name):
+    """Validate tensor dimensions to prevent CUDA indexing issues"""
+    try:
+        # Get a sample batch to check dimensions
+        sample_batch = next(iter(data_loader))
+        if isinstance(sample_batch, (list, tuple)):
+            x = sample_batch[0]
+        else:
+            x = sample_batch
+
+        batch_size, seq_len = x.shape[:2]
+        channels = x.shape[2] if len(x.shape) > 2 else 1
+
+        print(f"Dataset {dataset_name} dimensions: batch={batch_size}, seq_len={seq_len}, channels={channels}")
+
+        # Check for problematic dimensions that might cause CUDA issues
+        if seq_len > 10000:
+            print(f"WARNING: Very long sequence length ({seq_len}) may cause CUDA indexing issues")
+        if batch_size > 1000:
+            print(f"WARNING: Very large batch size ({batch_size}) may cause memory issues")
+        if channels > 1000:
+            print(f"WARNING: Very high dimensionality ({channels}) may cause issues")
+
+        return True
+    except Exception as e:
+        print(f"ERROR: Failed to validate tensor dimensions for {dataset_name}: {e}")
+        return False
+
 def setup_logging(log_dir: str, dataset_name: str) -> logging.Logger:
     """Setup logging for the training run"""
     os.makedirs(log_dir, exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"train_{dataset_name}_{timestamp}.log")
-    
+
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -37,7 +65,7 @@ def setup_logging(log_dir: str, dataset_name: str) -> logging.Logger:
             logging.StreamHandler()
         ]
     )
-    
+
     return logging.getLogger(__name__)
 
 
