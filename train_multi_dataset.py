@@ -30,7 +30,7 @@ def setup_logging(log_dir: str, dataset_name: str) -> logging.Logger:
     log_file = os.path.join(log_dir, f"train_{dataset_name}_{timestamp}.log")
     
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler(log_file),

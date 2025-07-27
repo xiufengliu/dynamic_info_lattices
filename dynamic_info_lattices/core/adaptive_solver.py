@@ -121,9 +121,19 @@ class AdaptiveSolver(nn.Module):
         Returns:
             z_next: Next state
         """
+        # Debug logging for CUDA index investigation
+        logger.debug(f"DPM solver step: z.shape={z.shape}, k={k}, k_prev={k_prev}, solver_order={solver_order}, t={t}, f={f}, s={s}")
+
         solver_fn = self.solvers.get(solver_order, self._euler_step)
 
-        return solver_fn(z, k, k_prev, score_network, t, f, s)
+        try:
+            result = solver_fn(z, k, k_prev, score_network, t, f, s)
+            logger.debug(f"DPM solver step completed successfully, result.shape={result.shape}")
+            return result
+        except Exception as e:
+            logger.error(f"DPM solver step failed: {e}")
+            logger.error(f"Input: z.shape={z.shape}, k={k}, k_prev={k_prev}, solver_order={solver_order}")
+            raise
     
     def adaptive_guidance_strength(
         self,
@@ -219,18 +229,26 @@ class AdaptiveSolver(nn.Module):
         if seq_len == 0 or channels == 0:
             raise ValueError(f"Invalid tensor dimensions: {z.shape}")
 
+        # Debug logging for CUDA index investigation
+        logger.debug(f"Euler step: z.shape={z.shape}, k={k}, device={z.device}")
+
         # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
         z_transposed = z.transpose(-2, -1)
+        logger.debug(f"Euler step: z_transposed.shape={z_transposed.shape}")
 
         # Create timestep tensor with correct batch size
         timesteps = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
+        logger.debug(f"Euler step: timesteps.shape={timesteps.shape}, timesteps={timesteps}")
 
         # Compute score with error handling
         try:
             with torch.no_grad():
+                logger.debug(f"Calling score network with z_transposed.shape={z_transposed.shape}, timesteps.shape={timesteps.shape}")
                 score = score_network(z_transposed, timesteps)
+                logger.debug(f"Score network output shape: {score.shape}")
         except Exception as e:
-            logger.warning(f"Score network error in Euler step: {e}")
+            logger.error(f"Score network error in Euler step: {e}")
+            logger.error(f"Input shapes: z_transposed={z_transposed.shape}, timesteps={timesteps.shape}")
             # Return zero gradient as fallback
             return z
 

@@ -337,19 +337,25 @@ class DynamicInfoLattices(nn.Module):
         node_entropies.sort(key=lambda x: x[0], reverse=True)
 
         for entropy_val, t, f, s in node_entropies:
+            # Debug logging for lattice node processing
+            logger.debug(f"Processing node: entropy={entropy_val:.6f}, t={t}, f={f}, s={s}")
+
             # Extract local region
             z_local = self._extract_local_region(z_k, t, f, s)
+            logger.debug(f"Extracted local region shape: {z_local.shape}")
 
             # Select solver order based on entropy and stability
             solver_order = self.solver.select_solver_order(
                 entropy_map, t, f, s, k, active_nodes
             )
+            logger.debug(f"Selected solver order: {solver_order}")
 
             # Apply DPM solver step
             z_local_updated = self.solver.dpm_solver_step(
                 z_local, k, k_prev, solver_order, self.score_network,
                 t, f, s
             )
+            logger.debug(f"Updated local region shape: {z_local_updated.shape}")
 
             # Apply adaptive guidance if enabled
             if self.config.adaptive_guidance:
@@ -404,7 +410,11 @@ class DynamicInfoLattices(nn.Module):
         scale_factor = 2 ** s
         seq_len = z.shape[1]
 
+        # Debug logging for CUDA index investigation
+        logger.debug(f"_extract_local_region: z.shape={z.shape}, t={t}, f={f}, s={s}, scale_factor={scale_factor}")
+
         # Ensure t coordinate is within bounds
+        t_orig = t
         t = max(0, min(t, seq_len - 1))
 
         # Extract temporal region based on scale with proper bounds checking
@@ -415,11 +425,23 @@ class DynamicInfoLattices(nn.Module):
         if t_end <= t_start:
             t_end = min(t_start + 1, seq_len)
 
+        # Additional debug logging
+        logger.debug(f"_extract_local_region: t_orig={t_orig}, t_adjusted={t}, t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
+
+        # Validate indices before slicing
+        if t_start < 0 or t_end > seq_len or t_start >= t_end:
+            logger.error(f"Invalid slice indices: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
+            raise ValueError(f"Invalid slice indices: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
+
         if len(z.shape) == 3:  # [batch, length, channels]
             # Always preserve ALL channels for proper ScoreNetwork input
-            return z[:, t_start:t_end, :]
+            result = z[:, t_start:t_end, :]
+            logger.debug(f"_extract_local_region result shape: {result.shape}")
+            return result
         else:  # [batch, length]
-            return z[:, t_start:t_end]
+            result = z[:, t_start:t_end]
+            logger.debug(f"_extract_local_region result shape: {result.shape}")
+            return result
 
     def _update_local_region(
         self,
