@@ -277,12 +277,11 @@ class AdaptiveSolver(nn.Module):
         timesteps = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
         logger.debug(f"Euler step: timesteps.shape={timesteps.shape}, timesteps={timesteps}")
 
-        # Compute score with error handling
+        # Compute score with error handling (PRESERVE GRADIENTS!)
         try:
-            with torch.no_grad():
-                logger.debug(f"Calling score network with z_transposed.shape={z_transposed.shape}, timesteps.shape={timesteps.shape}")
-                score = score_network(z_transposed, timesteps)
-                logger.debug(f"Score network output shape: {score.shape}")
+            logger.debug(f"Calling score network with z_transposed.shape={z_transposed.shape}, timesteps.shape={timesteps.shape}")
+            score = score_network(z_transposed, timesteps)
+            logger.debug(f"Score network output shape: {score.shape}")
         except Exception as e:
             logger.error(f"Score network error in Euler step: {e}")
             logger.error(f"Input shapes: z_transposed={z_transposed.shape}, timesteps={timesteps.shape}")
@@ -329,10 +328,9 @@ class AdaptiveSolver(nn.Module):
         timesteps_k = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
         timesteps_k_prev = torch.full((batch_size,), k_prev, device=z.device, dtype=torch.long)
 
-        # First stage with error handling
+        # First stage with error handling (PRESERVE GRADIENTS!)
         try:
-            with torch.no_grad():
-                score_1 = score_network(z_transposed, timesteps_k)
+            score_1 = score_network(z_transposed, timesteps_k)
         except Exception as e:
             logger.warning(f"Score network error in Heun step (stage 1): {e}")
             return z
@@ -342,10 +340,9 @@ class AdaptiveSolver(nn.Module):
         z_temp = z + h * score_1
         z_temp_transposed = z_temp.transpose(-2, -1)
 
-        # Second stage with error handling
+        # Second stage with error handling (PRESERVE GRADIENTS!)
         try:
-            with torch.no_grad():
-                score_2 = score_network(z_temp_transposed, timesteps_k_prev)
+            score_2 = score_network(z_temp_transposed, timesteps_k_prev)
         except Exception as e:
             logger.warning(f"Score network error in Heun step (stage 2): {e}")
             return z
@@ -381,27 +378,26 @@ class AdaptiveSolver(nn.Module):
         batch_size = z.shape[0]
         timesteps_k = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
 
-        # Three-stage Runge-Kutta
-        with torch.no_grad():
-            # Stage 1
-            score_1 = score_network(z_transposed, timesteps_k)
-            score_1 = score_1.transpose(-2, -1)  # Transpose back
-            z_1 = z + h * score_1 / 3
-            z_1_transposed = z_1.transpose(-2, -1)
+        # Three-stage Runge-Kutta (PRESERVE GRADIENTS!)
+        # Stage 1
+        score_1 = score_network(z_transposed, timesteps_k)
+        score_1 = score_1.transpose(-2, -1)  # Transpose back
+        z_1 = z + h * score_1 / 3
+        z_1_transposed = z_1.transpose(-2, -1)
 
-            # Stage 2
-            k_mid = int(k + (k_prev - k) / 3)
-            timesteps_k_mid = torch.full((batch_size,), k_mid, device=z.device, dtype=torch.long)
-            score_2 = score_network(z_1_transposed, timesteps_k_mid)
-            score_2 = score_2.transpose(-2, -1)  # Transpose back
-            z_2 = z + h * (score_1 + score_2) / 6
-            z_2_transposed = z_2.transpose(-2, -1)
+        # Stage 2
+        k_mid = int(k + (k_prev - k) / 3)
+        timesteps_k_mid = torch.full((batch_size,), k_mid, device=z.device, dtype=torch.long)
+        score_2 = score_network(z_1_transposed, timesteps_k_mid)
+        score_2 = score_2.transpose(-2, -1)  # Transpose back
+        z_2 = z + h * (score_1 + score_2) / 6
+        z_2_transposed = z_2.transpose(-2, -1)
 
-            # Stage 3
-            k_mid2 = int(k + 2 * (k_prev - k) / 3)
-            timesteps_k_mid2 = torch.full((batch_size,), k_mid2, device=z.device, dtype=torch.long)
-            score_3 = score_network(z_2_transposed, timesteps_k_mid2)
-            score_3 = score_3.transpose(-2, -1)  # Transpose back
+        # Stage 3
+        k_mid2 = int(k + 2 * (k_prev - k) / 3)
+        timesteps_k_mid2 = torch.full((batch_size,), k_mid2, device=z.device, dtype=torch.long)
+        score_3 = score_network(z_2_transposed, timesteps_k_mid2)
+        score_3 = score_3.transpose(-2, -1)  # Transpose back
 
         # Third-order combination
         z_next = z + h * (score_1 + 3 * score_3) / 4
