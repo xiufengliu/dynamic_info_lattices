@@ -205,28 +205,28 @@ class MultiComponentEntropy(nn.Module):
         # Validate indices before slicing with strict checks
         if t_start < 0 or t_end > seq_len or t_start >= t_end or t_start >= seq_len or t_end <= 0:
             logger.error(f"Invalid slice indices in multi_component_entropy: t_start={t_start}, t_end={t_end}, seq_len={seq_len}")
-            # Return a safe fallback instead of crashing
+            # Return a safe fallback instead of crashing (preserve gradients)
             if len(z.shape) == 3:
-                return z[:, :1, :].clone()  # Return first time step as fallback
+                return z[:, :1, :]  # Return first time step as fallback
             else:
-                return z[:, :1].clone()
+                return z[:, :1]
 
         # CUDA-safe tensor slicing with explicit bounds
         try:
             if len(z.shape) == 3:  # [batch, length, channels]
                 # Always preserve ALL channels - don't slice the channel dimension
                 # This ensures ScoreNetwork gets the expected number of input channels
-                return z[:, t_start:t_end, :].clone()
+                return z[:, t_start:t_end, :]  # Remove .clone() to preserve gradients
             else:  # [batch, length]
-                return z[:, t_start:t_end].clone()
+                return z[:, t_start:t_end]  # Remove .clone() to preserve gradients
         except Exception as e:
             logger.error(f"CUDA indexing error in multi_component_entropy._extract_local_region: {e}")
             logger.error(f"Tensor shape: {z.shape}, indices: [{t_start}:{t_end}]")
-            # Return safe fallback
+            # Return safe fallback (preserve gradients)
             if len(z.shape) == 3:
-                return z[:, :1, :].clone()
+                return z[:, :1, :]
             else:
-                return z[:, :1].clone()
+                return z[:, :1]
     
     def _estimate_score_entropy(
         self,
