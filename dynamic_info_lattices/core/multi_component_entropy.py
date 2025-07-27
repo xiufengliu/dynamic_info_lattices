@@ -165,7 +165,11 @@ class MultiComponentEntropy(nn.Module):
 
                 # Combine entropy components according to Equation (1)
                 entropy_components = torch.stack(valid_components)
-            entropy_map[i] = torch.sum(weights * entropy_components)
+                entropy_map[i] = torch.sum(weights * entropy_components)
+
+            except Exception as e:
+                logger.warning(f"Error processing entropy components for node {i}: {e}")
+                entropy_map[i] = torch.tensor(0.0, device=device, dtype=z.dtype)
 
         return entropy_map
     
