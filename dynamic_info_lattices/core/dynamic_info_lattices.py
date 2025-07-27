@@ -445,27 +445,24 @@ class DynamicInfoLattices(nn.Module):
         if t_end <= t_start:
             t_end = min(t_start + 1, seq_len)
 
-        # Handle 1D vs 2D data
-        # For time series data with shape (seq_len, channels), treat as 1D along sequence dimension
-        if len(self.data_shape) == 2 and len(z_global.shape) == 3:  # Time series: [batch, seq_len, channels]
-            if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
-                z_updated[:, t_start:t_end, :] = z_local[:, :t_end-t_start, :]  # Keep all channels
-        elif len(self.data_shape) == 1:  # Pure 1D time series
-            if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
-                z_updated[:, t_start:t_end] = z_local[:, :t_end-t_start]
+        # Handle tensor updates with proper bounds checking
+        # Always use the bounds-checked t_start and t_end from above
+        if len(z_global.shape) == 3:  # [batch, length, channels]
+            # Ensure z_local has enough data to fill the region
+            available_length = z_local.shape[1]
+            required_length = t_end - t_start
 
-            if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
-                z_updated[:, t_start:t_end] = z_local[:, :t_end-t_start]
-        else:  # True 2D spatial data
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, z_global.shape[1])
-            f_start = f * scale_factor
-            f_end = min((f + 1) * scale_factor, z_global.shape[2])
+            if available_length >= required_length and required_length > 0:
+                # Safe assignment with proper bounds
+                z_updated[:, t_start:t_end, :] = z_local[:, :required_length, :]
+        elif len(z_global.shape) == 2:  # [batch, length]
+            # Ensure z_local has enough data to fill the region
+            available_length = z_local.shape[1]
+            required_length = t_end - t_start
 
-            if (t_end > t_start and f_end > f_start and
-                z_local.shape[1] >= (t_end - t_start) and
-                z_local.shape[2] >= (f_end - f_start)):
-                z_updated[:, t_start:t_end, f_start:f_end] = z_local[:, :t_end-t_start, :f_end-f_start]
+            if available_length >= required_length and required_length > 0:
+                # Safe assignment with proper bounds
+                z_updated[:, t_start:t_end] = z_local[:, :required_length]
 
         return z_updated
     

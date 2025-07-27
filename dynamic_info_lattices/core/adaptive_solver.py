@@ -211,16 +211,28 @@ class AdaptiveSolver(nn.Module):
         alpha_k_prev = self._get_alpha(k_prev)
         sigma_k = self._get_sigma(k)
 
+        # Validate input tensor dimensions
+        if len(z.shape) != 3:
+            raise ValueError(f"Expected 3D tensor [batch, length, channels], got {z.shape}")
+
+        batch_size, seq_len, channels = z.shape
+        if seq_len == 0 or channels == 0:
+            raise ValueError(f"Invalid tensor dimensions: {z.shape}")
+
         # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
         z_transposed = z.transpose(-2, -1)
 
         # Create timestep tensor with correct batch size
-        batch_size = z.shape[0]
         timesteps = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
 
-        # Compute score
-        with torch.no_grad():
-            score = score_network(z_transposed, timesteps)
+        # Compute score with error handling
+        try:
+            with torch.no_grad():
+                score = score_network(z_transposed, timesteps)
+        except Exception as e:
+            logger.warning(f"Score network error in Euler step: {e}")
+            # Return zero gradient as fallback
+            return z
 
         # Transpose back: [batch, channels, length] -> [batch, length, channels]
         score = score.transpose(-2, -1)
@@ -247,26 +259,41 @@ class AdaptiveSolver(nn.Module):
         alpha_k_prev = self._get_alpha(k_prev)
         h = alpha_k_prev - alpha_k
 
+        # Validate input tensor dimensions
+        if len(z.shape) != 3:
+            raise ValueError(f"Expected 3D tensor [batch, length, channels], got {z.shape}")
+
+        batch_size, seq_len, channels = z.shape
+        if seq_len == 0 or channels == 0:
+            raise ValueError(f"Invalid tensor dimensions: {z.shape}")
+
         # Transpose tensor for 1D convolution: [batch, length, channels] -> [batch, channels, length]
         z_transposed = z.transpose(-2, -1)
 
         # Create timestep tensors with correct batch size
-        batch_size = z.shape[0]
         timesteps_k = torch.full((batch_size,), k, device=z.device, dtype=torch.long)
         timesteps_k_prev = torch.full((batch_size,), k_prev, device=z.device, dtype=torch.long)
 
-        # First stage
-        with torch.no_grad():
-            score_1 = score_network(z_transposed, timesteps_k)
+        # First stage with error handling
+        try:
+            with torch.no_grad():
+                score_1 = score_network(z_transposed, timesteps_k)
+        except Exception as e:
+            logger.warning(f"Score network error in Heun step (stage 1): {e}")
+            return z
 
         # Transpose back for computation
         score_1 = score_1.transpose(-2, -1)
         z_temp = z + h * score_1
         z_temp_transposed = z_temp.transpose(-2, -1)
 
-        # Second stage
-        with torch.no_grad():
-            score_2 = score_network(z_temp_transposed, timesteps_k_prev)
+        # Second stage with error handling
+        try:
+            with torch.no_grad():
+                score_2 = score_network(z_temp_transposed, timesteps_k_prev)
+        except Exception as e:
+            logger.warning(f"Score network error in Heun step (stage 2): {e}")
+            return z
 
         # Transpose back
         score_2 = score_2.transpose(-2, -1)
