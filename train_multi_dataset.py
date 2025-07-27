@@ -307,13 +307,13 @@ def main():
                 # Use the DIL model's forward method which handles the score network correctly
                 outputs = model(inputs, mask)
 
-                # Ensure output shape matches target shape
+                # Ensure output shape matches target shape (preserve gradients)
                 if outputs.shape[1] > targets.shape[1]:
                     outputs = outputs[:, -targets.shape[1]:, :]
                 elif outputs.shape[1] < targets.shape[1]:
-                    # Pad if necessary
+                    # Pad if necessary (preserve gradients)
                     pad_size = targets.shape[1] - outputs.shape[1]
-                    outputs = torch.cat([outputs, outputs[:, -1:, :].repeat(1, pad_size, 1)], dim=1)
+                    outputs = torch.cat([outputs, outputs[:, -1:, :].expand(-1, pad_size, -1)], dim=1)
 
                 loss = criterion(outputs, targets)
             except Exception as e:

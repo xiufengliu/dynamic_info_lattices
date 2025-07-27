@@ -166,8 +166,8 @@ class DynamicInfoLattices(nn.Module):
             # Phase 1: Multi-Component Entropy Estimation (Algorithm S2)
             entropy_map = self._estimate_entropy_map(z_k, k, lattice_k, y_obs)
 
-            # Store entropy for temporal analysis
-            self.entropy_history.append(entropy_map.clone())
+            # Store entropy for temporal analysis (detach to avoid memory issues)
+            self.entropy_history.append(entropy_map.detach().clone())
 
             # Phase 2: Dynamic Lattice Adaptation (Algorithm S4) with size limits
             # Check lattice size before adaptation to prevent CUDA issues
@@ -484,8 +484,8 @@ class DynamicInfoLattices(nn.Module):
         s: int
     ) -> torch.Tensor:
         """Update local region in global tensor"""
-        # Use z_global directly to preserve gradient flow
-        z_updated = z_global
+        # Create a copy to preserve gradient flow while allowing updates
+        z_updated = z_global.clone()
         scale_factor = 2 ** s
         seq_len = z_global.shape[1]
 
