@@ -144,10 +144,18 @@ class MultiComponentEntropy(nn.Module):
         FIXED: Extract temporal region but preserve ALL channels for proper ScoreNetwork input
         """
         scale_factor = 2 ** s
+        seq_len = z.shape[1]
 
-        # Extract temporal region based on scale
-        t_start = max(0, min(t, z.shape[1] - 1))
-        t_end = max(t_start + 1, min(t + scale_factor, z.shape[1]))
+        # Ensure t coordinate is within bounds
+        t = max(0, min(t, seq_len - 1))
+
+        # Extract temporal region based on scale with proper bounds checking
+        t_start = t
+        t_end = min(t + scale_factor, seq_len)
+
+        # Ensure we have at least one time step
+        if t_end <= t_start:
+            t_end = min(t_start + 1, seq_len)
 
         if len(z.shape) == 3:  # [batch, length, channels]
             # Always preserve ALL channels - don't slice the channel dimension

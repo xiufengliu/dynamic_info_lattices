@@ -402,10 +402,18 @@ class DynamicInfoLattices(nn.Module):
         FIXED: Use consistent coordinate system with proper bounds checking
         """
         scale_factor = 2 ** s
+        seq_len = z.shape[1]
 
-        # Extract temporal region based on scale, preserve all channels
-        t_start = max(0, min(t, z.shape[1] - 1))
-        t_end = max(t_start + 1, min(t + scale_factor, z.shape[1]))
+        # Ensure t coordinate is within bounds
+        t = max(0, min(t, seq_len - 1))
+
+        # Extract temporal region based on scale with proper bounds checking
+        t_start = t
+        t_end = min(t + scale_factor, seq_len)
+
+        # Ensure we have at least one time step
+        if t_end <= t_start:
+            t_end = min(t_start + 1, seq_len)
 
         if len(z.shape) == 3:  # [batch, length, channels]
             # Always preserve ALL channels for proper ScoreNetwork input
@@ -424,18 +432,27 @@ class DynamicInfoLattices(nn.Module):
         """Update local region in global tensor"""
         z_updated = z_global.clone()
         scale_factor = 2 ** s
+        seq_len = z_global.shape[1]
+
+        # Ensure t coordinate is within bounds
+        t = max(0, min(t, seq_len - 1))
+
+        # Extract temporal region based on scale with proper bounds checking
+        t_start = t
+        t_end = min(t + scale_factor, seq_len)
+
+        # Ensure we have at least one time step
+        if t_end <= t_start:
+            t_end = min(t_start + 1, seq_len)
 
         # Handle 1D vs 2D data
         # For time series data with shape (seq_len, channels), treat as 1D along sequence dimension
         if len(self.data_shape) == 2 and len(z_global.shape) == 3:  # Time series: [batch, seq_len, channels]
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, z_global.shape[1])
-
             if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
                 z_updated[:, t_start:t_end, :] = z_local[:, :t_end-t_start, :]  # Keep all channels
         elif len(self.data_shape) == 1:  # Pure 1D time series
-            t_start = t * scale_factor
-            t_end = min((t + 1) * scale_factor, z_global.shape[1])
+            if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
+                z_updated[:, t_start:t_end] = z_local[:, :t_end-t_start]
 
             if t_end > t_start and z_local.shape[1] >= (t_end - t_start):
                 z_updated[:, t_start:t_end] = z_local[:, :t_end-t_start]
