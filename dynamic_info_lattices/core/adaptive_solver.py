@@ -91,11 +91,12 @@ class AdaptiveSolver(nn.Module):
             # Stability analysis based on entropy with error handling
             try:
                 stability_score = self._compute_stability_score(local_entropy, k)
-                # Validate stability score
-                if torch.isnan(stability_score) or torch.isinf(stability_score):
+                # Convert to float and validate
+                stability_score = float(stability_score)
+                # Validate stability score using math functions
+                import math
+                if math.isnan(stability_score) or math.isinf(stability_score):
                     stability_score = 0.5  # Default moderate stability
-                else:
-                    stability_score = float(stability_score)
             except Exception as e:
                 logger.debug(f"Error computing stability score: {e}")
                 stability_score = 0.5  # Default moderate stability
