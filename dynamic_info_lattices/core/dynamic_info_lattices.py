@@ -36,6 +36,7 @@ class DILConfig:
     base_resolution: Tuple[int, int] = (64, 64)  # (time, frequency)
     refinement_threshold: float = 0.3
     coarsening_threshold: float = 0.1
+    max_lattice_size: int = 50000  # Maximum number of nodes to prevent CUDA issues
     
     # Entropy parameters
     entropy_budget: float = 0.2  # 20% of lattice nodes
@@ -168,10 +169,22 @@ class DynamicInfoLattices(nn.Module):
             # Store entropy for temporal analysis
             self.entropy_history.append(entropy_map.clone())
 
-            # Phase 2: Dynamic Lattice Adaptation (Algorithm S4)
-            lattice_k_prev = self.lattice.adapt_lattice(
-                lattice_k, entropy_map, k, self._compute_entropy_gradients(entropy_map, lattice_k)
-            )
+            # Phase 2: Dynamic Lattice Adaptation (Algorithm S4) with size limits
+            # Check lattice size before adaptation to prevent CUDA issues
+            current_size = len(lattice_k['active_nodes'])
+            if current_size > self.config.max_lattice_size:
+                logger.warning(f"Lattice size ({current_size}) exceeds maximum ({self.config.max_lattice_size}), skipping adaptation")
+                lattice_k_prev = lattice_k
+            else:
+                lattice_k_prev = self.lattice.adapt_lattice(
+                    lattice_k, entropy_map, k, self._compute_entropy_gradients(entropy_map, lattice_k)
+                )
+
+                # Validate adapted lattice size
+                adapted_size = len(lattice_k_prev['active_nodes'])
+                if adapted_size > self.config.max_lattice_size:
+                    logger.warning(f"Adapted lattice size ({adapted_size}) exceeds maximum, reverting to previous lattice")
+                    lattice_k_prev = lattice_k
 
             # Phase 3: Information-Aware Sampling (Algorithm S5)
             selected_nodes = self.sampler.stratified_sample(

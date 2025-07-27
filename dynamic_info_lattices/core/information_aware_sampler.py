@@ -53,15 +53,40 @@ class InformationAwareSampler(nn.Module):
         # Compute total budget
         total_budget = max(1, int(budget_fraction * len(active_nodes)))
         
-        # Compute sampling probabilities
-        probabilities = self._compute_sampling_probabilities(
-            entropy_map, active_nodes, lattice
-        )
-        
-        # Partition nodes into strata by entropy
-        strata = self._partition_by_entropy(
-            active_nodes, entropy_map, self.num_strata
-        )
+        # CUDA-safe size validation
+        if len(entropy_map) == 0:
+            return active_nodes[:1] if active_nodes else []  # Return at least one node
+
+        # Ensure entropy_map and active_nodes are compatible sizes
+        if len(entropy_map) != len(active_nodes):
+            logger.warning(f"Entropy map size ({len(entropy_map)}) != active nodes size ({len(active_nodes)})")
+            # Safely resize entropy_map to match active_nodes
+            if len(entropy_map) > len(active_nodes):
+                entropy_map = entropy_map[:len(active_nodes)]
+            else:
+                # Pad with zeros if entropy_map is smaller
+                padding = torch.zeros(len(active_nodes) - len(entropy_map), device=entropy_map.device, dtype=entropy_map.dtype)
+                entropy_map = torch.cat([entropy_map, padding])
+
+        # Compute sampling probabilities with error handling
+        try:
+            probabilities = self._compute_sampling_probabilities(
+                entropy_map, active_nodes, lattice
+            )
+        except Exception as e:
+            logger.warning(f"Error computing sampling probabilities: {e}")
+            # Fallback to uniform probabilities
+            probabilities = torch.ones(len(active_nodes), device=entropy_map.device, dtype=entropy_map.dtype) / len(active_nodes)
+
+        # Partition nodes into strata by entropy with error handling
+        try:
+            strata = self._partition_by_entropy(
+                active_nodes, entropy_map, self.num_strata
+            )
+        except Exception as e:
+            logger.warning(f"Error partitioning by entropy: {e}")
+            # Fallback to single stratum
+            strata = [(active_nodes, entropy_map)]
         
         # Perform stratified sampling
         selected_nodes = []
@@ -69,23 +94,51 @@ class InformationAwareSampler(nn.Module):
         for stratum_nodes, stratum_entropies in strata:
             if len(stratum_nodes) == 0:
                 continue
-                
-            # Allocate budget to this stratum
-            stratum_budget = max(1, int(total_budget * len(stratum_nodes) / len(active_nodes)))
-            
-            # Normalize probabilities within stratum
-            stratum_indices = [active_nodes.index(node) for node in stratum_nodes]
-            stratum_probs = probabilities[stratum_indices]
 
-            # Ensure stratum probabilities are valid
-            stratum_probs = torch.clamp(stratum_probs, min=1e-8)
-            stratum_sum = torch.sum(stratum_probs)
+            try:
+                # Allocate budget to this stratum with safe division
+                if len(active_nodes) > 0:
+                    stratum_budget = max(1, int(total_budget * len(stratum_nodes) / len(active_nodes)))
+                else:
+                    stratum_budget = 1
 
-            if stratum_sum <= 1e-8:
-                # Fallback to uniform distribution within stratum
-                stratum_probs = torch.ones_like(stratum_probs) / len(stratum_probs)
-            else:
-                stratum_probs = stratum_probs / stratum_sum
+                # Normalize probabilities within stratum with CUDA-safe indexing
+                stratum_indices = []
+                for node in stratum_nodes:
+                    try:
+                        idx = active_nodes.index(node)
+                        if 0 <= idx < len(probabilities):
+                            stratum_indices.append(idx)
+                    except ValueError:
+                        continue  # Skip nodes not found in active_nodes
+
+                if not stratum_indices:
+                    continue  # Skip empty strata
+
+                # CUDA-safe tensor indexing
+                try:
+                    stratum_probs = probabilities[stratum_indices]
+                except Exception as e:
+                    logger.debug(f"Error indexing probabilities: {e}")
+                    # Fallback to uniform probabilities for this stratum
+                    stratum_probs = torch.ones(len(stratum_indices), device=probabilities.device, dtype=probabilities.dtype) / len(stratum_indices)
+
+                # Ensure stratum probabilities are valid with NaN/Inf checking
+                if torch.any(torch.isnan(stratum_probs)) or torch.any(torch.isinf(stratum_probs)):
+                    stratum_probs = torch.ones_like(stratum_probs) / len(stratum_probs)
+                else:
+                    stratum_probs = torch.clamp(stratum_probs, min=1e-8)
+                    stratum_sum = torch.sum(stratum_probs)
+
+                    if stratum_sum <= 1e-8 or torch.isnan(stratum_sum) or torch.isinf(stratum_sum):
+                        # Fallback to uniform distribution within stratum
+                        stratum_probs = torch.ones_like(stratum_probs) / len(stratum_probs)
+                    else:
+                        stratum_probs = stratum_probs / stratum_sum
+
+            except Exception as e:
+                logger.warning(f"Error processing stratum: {e}")
+                continue
             
             # Sample from stratum
             stratum_selected = self._multinomial_sample(

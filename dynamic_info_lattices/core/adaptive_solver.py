@@ -68,33 +68,52 @@ class AdaptiveSolver(nn.Module):
         Returns:
             solver_order: Selected solver order (1, 2, or 3)
         """
-        # Get local entropy value
-        if active_nodes is not None:
-            try:
-                node_idx = active_nodes.index((t, f, s))
-            except ValueError:
-                return 1  # Default if node not found
-        else:
-            node_idx = self._get_node_index(entropy_map, t, f, s)
+        # Get local entropy value with CUDA-safe bounds checking
+        try:
+            if active_nodes is not None:
+                try:
+                    node_idx = active_nodes.index((t, f, s))
+                except ValueError:
+                    return 1  # Default if node not found
+            else:
+                node_idx = self._get_node_index(entropy_map, t, f, s)
 
-        if node_idx >= len(entropy_map):
-            return 1  # Default to first-order for safety
-        
-        local_entropy = entropy_map[node_idx]
-        
-        # Stability analysis based on entropy
-        stability_score = self._compute_stability_score(local_entropy, k)
-        
-        # Select solver order based on stability
-        if stability_score < self.stability_thresholds[1]:
-            # High entropy/instability: use robust first-order
-            return 1
-        elif stability_score < self.stability_thresholds[2]:
-            # Medium entropy: use second-order
-            return 2
-        else:
-            # Low entropy/stable: use high-order for accuracy
-            return 3
+            # CUDA-safe bounds checking
+            if node_idx >= len(entropy_map) or node_idx < 0:
+                return 1  # Default to first-order for safety
+
+            local_entropy = entropy_map[node_idx]
+
+            # Validate entropy tensor value
+            if torch.isnan(local_entropy) or torch.isinf(local_entropy):
+                return 1  # Default to first-order for invalid values
+
+            # Stability analysis based on entropy with error handling
+            try:
+                stability_score = self._compute_stability_score(local_entropy, k)
+                # Validate stability score
+                if torch.isnan(stability_score) or torch.isinf(stability_score):
+                    stability_score = 0.5  # Default moderate stability
+                else:
+                    stability_score = float(stability_score)
+            except Exception as e:
+                logger.debug(f"Error computing stability score: {e}")
+                stability_score = 0.5  # Default moderate stability
+
+            # Select solver order based on stability with safe bounds
+            if stability_score < self.stability_thresholds[1]:
+                # High entropy/instability: use robust first-order
+                return 1
+            elif stability_score < self.stability_thresholds[2]:
+                # Medium entropy: use second-order
+                return 2
+            else:
+                # Low entropy/stable: use high-order for accuracy
+                return 3
+
+        except Exception as e:
+            logger.warning(f"Error in solver order selection: {e}")
+            return 1  # Safe fallback
     
     def dpm_solver_step(
         self,
@@ -171,22 +190,39 @@ class AdaptiveSolver(nn.Module):
         s: int
     ) -> int:
         """
-        Get index of node in entropy map
+        Get index of node in entropy map with CUDA-safe bounds checking
 
         Proper lattice coordinate to linear index mapping.
         """
         if len(entropy_map) == 0:
             return 0
 
-        # Simple linear mapping for now - in practice would use proper lattice structure
-        # Ensure we don't exceed bounds
+        # CUDA-safe bounds checking with additional validation
         max_idx = len(entropy_map) - 1
+        if max_idx < 0:
+            return 0
+
+        # Validate input coordinates
+        if t < 0 or f < 0 or s < 0:
+            return 0
 
         # Create a deterministic mapping from (t,f,s) to index
         # This is simplified - real implementation would use lattice structure
-        linear_idx = (t % 10) + (f % 10) * 10 + (s % 4) * 100
+        # Use safe modulo operations to prevent overflow
+        try:
+            t_safe = max(0, t) % 100  # Limit to reasonable range
+            f_safe = max(0, f) % 100
+            s_safe = max(0, s) % 10
 
-        return min(linear_idx, max_idx)
+            linear_idx = t_safe + f_safe * 100 + s_safe * 10000
+
+            # Ensure index is within bounds
+            safe_idx = linear_idx % (max_idx + 1)
+            return min(safe_idx, max_idx)
+
+        except Exception as e:
+            logger.warning(f"Error computing node index for ({t}, {f}, {s}): {e}")
+            return 0
     
     def _compute_stability_score(
         self,

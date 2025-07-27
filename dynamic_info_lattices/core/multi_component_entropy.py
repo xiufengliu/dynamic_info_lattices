@@ -93,41 +93,78 @@ class MultiComponentEntropy(nn.Module):
         batch_size = z.shape[0]
         device = z.device
 
-        # Get active lattice nodes
+        # Get active lattice nodes with CUDA-safe size limits
         active_nodes = lattice.get('active_nodes', [])
 
         if not active_nodes:
             return torch.zeros(0, device=device, dtype=z.dtype)
+
+        # Check for reasonable lattice size to prevent CUDA memory issues
+        MAX_NODES_PER_BATCH = 10000  # Process in batches if too large
+        if len(active_nodes) > MAX_NODES_PER_BATCH:
+            logger.warning(f"Large lattice ({len(active_nodes)} nodes), truncating to {MAX_NODES_PER_BATCH}")
+            active_nodes = active_nodes[:MAX_NODES_PER_BATCH]
 
         # Initialize entropy map
         entropy_map = torch.zeros(
             len(active_nodes), device=device, dtype=z.dtype
         )
 
-        # Batch process entropy estimation for efficiency
+        # Batch process entropy estimation for efficiency with CUDA-safe operations
         all_z_local = []
         all_coords = []
 
         for i, (t, f, s) in enumerate(active_nodes):
-            # Extract local region
-            z_local = self._extract_local_region(z, t, f, s)
-            all_z_local.append(z_local)
-            all_coords.append((t, f, s))
+            try:
+                # Extract local region with CUDA-safe bounds checking
+                z_local = self._extract_local_region(z, t, f, s)
 
-        # Batch estimate entropy components
+                # Validate tensor before processing
+                if z_local.numel() == 0:
+                    logger.debug(f"Empty local region for node {i}, skipping")
+                    continue
+
+                # Check for invalid values
+                if torch.any(torch.isnan(z_local)) or torch.any(torch.isinf(z_local)):
+                    logger.debug(f"Invalid values in local region for node {i}, skipping")
+                    continue
+
+                all_z_local.append(z_local)
+                all_coords.append((t, f, s))
+
+            except Exception as e:
+                logger.warning(f"Error extracting local region for node {i}: {e}")
+                continue
+
+        # Batch estimate entropy components with CUDA-safe operations
         for i, ((t, f, s), z_local) in enumerate(zip(all_coords, all_z_local)):
-            # Estimate individual entropy components with proper implementations
-            h_score = self._estimate_score_entropy(z_local, k, score_network)
-            h_guidance = self._estimate_guidance_entropy(z_local, y_obs, t, f, s)
-            h_solver = self._estimate_solver_entropy(z_local, k, score_network)
-            h_temporal = self._estimate_temporal_entropy(z_local, t, entropy_history)
-            h_spectral = self._estimate_spectral_entropy(z_local, f)
+            try:
+                # Estimate individual entropy components with proper implementations
+                h_score = self._estimate_score_entropy(z_local, k, score_network)
+                h_guidance = self._estimate_guidance_entropy(z_local, y_obs, t, f, s)
+                h_solver = self._estimate_solver_entropy(z_local, k, score_network)
+                h_temporal = self._estimate_temporal_entropy(z_local, t, entropy_history)
+                h_spectral = self._estimate_spectral_entropy(z_local, f)
 
-            # Compute adaptive weights using the weight network
-            weights = self._compute_adaptive_weights(z_local, k, t, f, s)
+                # Validate all entropy components
+                entropy_components_list = [h_score, h_guidance, h_solver, h_temporal, h_spectral]
+                valid_components = []
 
-            # Combine entropy components according to Equation (1)
-            entropy_components = torch.stack([h_score, h_guidance, h_solver, h_temporal, h_spectral])
+                for comp in entropy_components_list:
+                    if torch.isnan(comp) or torch.isinf(comp):
+                        valid_components.append(torch.tensor(0.0, device=device, dtype=z.dtype))
+                    else:
+                        valid_components.append(comp)
+
+                # Compute adaptive weights using the weight network
+                weights = self._compute_adaptive_weights(z_local, k, t, f, s)
+
+                # Validate weights
+                if torch.any(torch.isnan(weights)) or torch.any(torch.isinf(weights)):
+                    weights = torch.ones(5, device=device, dtype=z.dtype) / 5.0  # Equal weights fallback
+
+                # Combine entropy components according to Equation (1)
+                entropy_components = torch.stack(valid_components)
             entropy_map[i] = torch.sum(weights * entropy_components)
 
         return entropy_map

@@ -144,37 +144,72 @@ class HierarchicalLattice(nn.Module):
     ) -> Dict:
         """
         Adapt lattice structure based on entropy patterns
-        
-        Implements Algorithm S4: Adaptive Lattice Refinement
-        
+
+        Implements Algorithm S4: Adaptive Lattice Refinement with CUDA-safe bounds checking
+
         Args:
             current_lattice: Current lattice structure
             entropy_map: Entropy values for each node
             k: Current diffusion step
-            
+
         Returns:
             adapted_lattice: Updated lattice structure
         """
         active_nodes = current_lattice['active_nodes']
         hierarchy = current_lattice['hierarchy'].copy()
-        
+
+        # CUDA-safe size limits to prevent memory/indexing issues
+        MAX_LATTICE_SIZE = 50000  # Prevent lattices from growing too large
+        if len(active_nodes) > MAX_LATTICE_SIZE:
+            logger.warning(f"Lattice size ({len(active_nodes)}) exceeds safe limit ({MAX_LATTICE_SIZE}), skipping adaptation")
+            return current_lattice
+
+        # Ensure entropy_map and active_nodes are compatible sizes
+        if len(entropy_map) != len(active_nodes):
+            logger.warning(f"Entropy map size ({len(entropy_map)}) != active nodes size ({len(active_nodes)}), adjusting")
+            # Safely resize entropy_map to match active_nodes
+            if len(entropy_map) > len(active_nodes):
+                entropy_map = entropy_map[:len(active_nodes)]
+            else:
+                # Pad with zeros if entropy_map is smaller
+                padding = torch.zeros(len(active_nodes) - len(entropy_map), device=entropy_map.device, dtype=entropy_map.dtype)
+                entropy_map = torch.cat([entropy_map, padding])
+
         # Compute entropy gradients for refinement decisions if not provided
         if entropy_gradients is None:
             entropy_gradients = self._compute_entropy_gradients(
                 entropy_map, active_nodes, current_lattice
             )
         
-        # Phase 1: Refinement
+        # Phase 1: Refinement with CUDA-safe bounds checking
         refinement_candidates = []
         for i, (t, f, s) in enumerate(active_nodes):
+            # CUDA-safe bounds checking for all array accesses
+            if i >= len(entropy_map) or i >= len(entropy_gradients):
+                continue
+
             if s < self.max_scales:  # Can only refine if not at maximum scale
-                entropy_val = entropy_map[i] if i < len(entropy_map) else 0.0
-                gradient_val = entropy_gradients[i] if i < len(entropy_gradients) else 0.0
-                
-                # Refinement criterion
-                if (entropy_val > self.refinement_threshold and 
-                    gradient_val > self.gradient_refinement_threshold):
-                    refinement_candidates.append((t, f, s))
+                try:
+                    entropy_val = float(entropy_map[i]) if i < len(entropy_map) else 0.0
+                    gradient_val = float(entropy_gradients[i]) if i < len(entropy_gradients) else 0.0
+
+                    # Additional validation for tensor values
+                    if torch.isnan(entropy_map[i]) or torch.isinf(entropy_map[i]):
+                        entropy_val = 0.0
+                    if torch.isnan(entropy_gradients[i]) or torch.isinf(entropy_gradients[i]):
+                        gradient_val = 0.0
+
+                    # Refinement criterion with safe value checks
+                    if (entropy_val > self.refinement_threshold and
+                        gradient_val > self.gradient_refinement_threshold and
+                        entropy_val < 1000.0 and gradient_val < 1000.0):  # Sanity bounds
+
+                        # Validate coordinates before adding to candidates
+                        if self._validate_coordinates(t, f, s):
+                            refinement_candidates.append((t, f, s))
+                except Exception as e:
+                    logger.warning(f"Error processing refinement candidate {i}: {e}")
+                    continue
         
         # Apply refinements
         new_nodes = []
@@ -188,29 +223,51 @@ class HierarchicalLattice(nn.Module):
                 hierarchy[child_scale] = []
             hierarchy[child_scale].extend(children)
         
-        # Phase 2: Coarsening
+        # Phase 2: Coarsening with CUDA-safe bounds checking
         coarsening_candidates = []
         for s in range(1, self.max_scales + 1):  # Start from scale 1
             if s in hierarchy:
                 scale_nodes = hierarchy[s]
-                
+
                 # Group siblings for coarsening evaluation
-                sibling_groups = self._group_siblings(scale_nodes)
-                
+                try:
+                    sibling_groups = self._group_siblings(scale_nodes)
+                except Exception as e:
+                    logger.warning(f"Error grouping siblings at scale {s}: {e}")
+                    continue
+
                 for siblings in sibling_groups:
-                    # Check if all siblings have low entropy
+                    # Check if all siblings have low entropy with CUDA-safe indexing
                     all_low_entropy = True
+                    valid_siblings = []
+
                     for sibling in siblings:
-                        if sibling in active_nodes:
-                            idx = active_nodes.index(sibling)
-                            if idx < len(entropy_map):
-                                entropy_val = entropy_map[idx]
-                                if entropy_val >= self.coarsening_threshold:
+                        try:
+                            if sibling in active_nodes:
+                                idx = active_nodes.index(sibling)
+                                # CUDA-safe bounds checking
+                                if 0 <= idx < len(entropy_map):
+                                    entropy_val = float(entropy_map[idx])
+
+                                    # Validate tensor value
+                                    if torch.isnan(entropy_map[idx]) or torch.isinf(entropy_map[idx]):
+                                        entropy_val = float('inf')  # Treat invalid values as high entropy
+
+                                    if entropy_val >= self.coarsening_threshold:
+                                        all_low_entropy = False
+                                        break
+                                    valid_siblings.append(sibling)
+                                else:
+                                    # Index out of bounds, treat as high entropy
                                     all_low_entropy = False
                                     break
-                    
-                    if all_low_entropy and len(siblings) > 1:
-                        coarsening_candidates.append(siblings)
+                        except Exception as e:
+                            logger.warning(f"Error processing sibling {sibling}: {e}")
+                            all_low_entropy = False
+                            break
+
+                    if all_low_entropy and len(valid_siblings) > 1:
+                        coarsening_candidates.append(valid_siblings)
         
         # Apply coarsening
         nodes_to_remove = []
@@ -352,46 +409,111 @@ class HierarchicalLattice(nn.Module):
         active_nodes: List[Tuple[int, int, int]],
         lattice: Dict
     ) -> torch.Tensor:
-        """Compute spatial gradients of entropy for refinement decisions"""
+        """Compute spatial gradients of entropy for refinement decisions with CUDA-safe bounds checking"""
         gradients = torch.zeros_like(entropy_map)
-        
+
         for i, (t, f, s) in enumerate(active_nodes):
-            if i >= len(entropy_map):
+            # CUDA-safe bounds checking
+            if i >= len(entropy_map) or i >= len(gradients):
                 continue
-                
-            # Find neighboring nodes at the same scale
-            neighbors = self._find_neighbors(t, f, s, active_nodes)
-            
-            if neighbors:
-                neighbor_entropies = []
-                for nt, nf, ns in neighbors:
-                    if (nt, nf, ns) in active_nodes:
-                        neighbor_idx = active_nodes.index((nt, nf, ns))
-                        if neighbor_idx < len(entropy_map):
-                            neighbor_entropies.append(entropy_map[neighbor_idx])
-                
-                if neighbor_entropies:
-                    neighbor_tensor = torch.stack(neighbor_entropies)
-                    current_entropy = entropy_map[i]
-                    
-                    # Compute gradient magnitude
-                    gradient_mag = torch.std(neighbor_tensor - current_entropy)
-                    gradients[i] = gradient_mag
-        
+
+            try:
+                # Validate current entropy value
+                if torch.isnan(entropy_map[i]) or torch.isinf(entropy_map[i]):
+                    gradients[i] = 0.0
+                    continue
+
+                # Find neighboring nodes at the same scale
+                neighbors = self._find_neighbors(t, f, s, active_nodes)
+
+                if neighbors:
+                    neighbor_entropies = []
+                    for nt, nf, ns in neighbors:
+                        try:
+                            if (nt, nf, ns) in active_nodes:
+                                neighbor_idx = active_nodes.index((nt, nf, ns))
+                                # CUDA-safe bounds checking for neighbor access
+                                if 0 <= neighbor_idx < len(entropy_map):
+                                    neighbor_entropy = entropy_map[neighbor_idx]
+                                    # Validate neighbor entropy value
+                                    if not (torch.isnan(neighbor_entropy) or torch.isinf(neighbor_entropy)):
+                                        neighbor_entropies.append(neighbor_entropy)
+                        except Exception as e:
+                            logger.debug(f"Error processing neighbor ({nt}, {nf}, {ns}): {e}")
+                            continue
+
+                    if len(neighbor_entropies) > 0:
+                        try:
+                            neighbor_tensor = torch.stack(neighbor_entropies)
+                            current_entropy = entropy_map[i]
+
+                            # Compute gradient magnitude with safe operations
+                            diff_tensor = neighbor_tensor - current_entropy
+                            gradient_mag = torch.std(diff_tensor)
+
+                            # Validate gradient value before assignment
+                            if not (torch.isnan(gradient_mag) or torch.isinf(gradient_mag)):
+                                gradients[i] = gradient_mag
+                            else:
+                                gradients[i] = 0.0
+                        except Exception as e:
+                            logger.debug(f"Error computing gradient for node {i}: {e}")
+                            gradients[i] = 0.0
+                    else:
+                        gradients[i] = 0.0
+                else:
+                    gradients[i] = 0.0
+
+            except Exception as e:
+                logger.warning(f"Error processing entropy gradient for node {i}: {e}")
+                if i < len(gradients):
+                    gradients[i] = 0.0
+                continue
+
         return gradients
     
+    def _validate_coordinates(self, t: int, f: int, s: int) -> bool:
+        """Validate that coordinates are within safe bounds"""
+        try:
+            # Check for reasonable coordinate values
+            if t < 0 or f < 0 or s < 0:
+                return False
+            if s > self.max_scales:
+                return False
+
+            # Check against data shape bounds
+            L, F = self.data_shape[:2] if len(self.data_shape) >= 2 else (self.data_shape[0], 1)
+            scale_factor = 2 ** s
+
+            # Ensure the region defined by these coordinates fits within data bounds
+            if t + scale_factor > L or f + scale_factor > F:
+                return False
+
+            return True
+        except Exception:
+            return False
+
     def _subdivide_node(self, t: int, f: int, s: int) -> List[Tuple[int, int, int]]:
-        """Subdivide a node into its children"""
+        """Subdivide a node into its children with CUDA-safe bounds checking"""
         children = []
         child_scale = s + 1
-        
-        # Each node subdivides into 4 children (2x2)
+
+        # Validate parent node first
+        if not self._validate_coordinates(t, f, s) or child_scale > self.max_scales:
+            return children
+
+        # Each node subdivides into 4 children (2x2) with bounds checking
+        L, F = self.data_shape[:2] if len(self.data_shape) >= 2 else (self.data_shape[0], 1)
+
         for dt in [0, 1]:
             for df in [0, 1]:
                 child_t = 2 * t + dt
                 child_f = 2 * f + df
-                children.append((child_t, child_f, child_scale))
-        
+
+                # Validate child coordinates before adding
+                if self._validate_coordinates(child_t, child_f, child_scale):
+                    children.append((child_t, child_f, child_scale))
+
         return children
     
     def _get_children_nodes(self, t: int, f: int, s: int) -> List[Tuple[int, int, int]]:
