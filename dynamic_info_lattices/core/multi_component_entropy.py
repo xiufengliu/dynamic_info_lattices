@@ -146,7 +146,7 @@ class MultiComponentEntropy(nn.Module):
                 h_temporal = self._estimate_temporal_entropy(z_local, t, entropy_history)
                 h_spectral = self._estimate_spectral_entropy(z_local, f)
 
-                # Validate all entropy components
+                # Validate all entropy components and ensure scalar values
                 entropy_components_list = [h_score, h_guidance, h_solver, h_temporal, h_spectral]
                 valid_components = []
 
@@ -154,7 +154,12 @@ class MultiComponentEntropy(nn.Module):
                     if torch.isnan(comp) or torch.isinf(comp):
                         valid_components.append(torch.tensor(0.0, device=device, dtype=z.dtype))
                     else:
-                        valid_components.append(comp)
+                        # Ensure scalar value by taking mean if tensor has multiple elements
+                        if comp.numel() > 1:
+                            comp_scalar = torch.mean(comp)
+                        else:
+                            comp_scalar = comp.squeeze()
+                        valid_components.append(comp_scalar)
 
                 # Compute adaptive weights using the weight network
                 weights = self._compute_adaptive_weights(z_local, k, t, f, s)
@@ -164,7 +169,8 @@ class MultiComponentEntropy(nn.Module):
                     weights = torch.ones(5, device=device, dtype=z.dtype) / 5.0  # Equal weights fallback
 
                 # Combine entropy components according to Equation (1)
-                entropy_components = torch.stack(valid_components)
+                # Ensure all components are scalars before stacking
+                entropy_components = torch.stack([comp.squeeze() if comp.numel() > 0 else torch.tensor(0.0, device=device) for comp in valid_components])
                 entropy_map[i] = torch.sum(weights * entropy_components)
 
             except Exception as e:
@@ -293,7 +299,9 @@ class MultiComponentEntropy(nn.Module):
         # This is more principled than the ad-hoc variance-log formulation
         entropy = 0.5 * torch.log(2 * np.pi * np.e * (var_score + 1e-8))
 
-        return torch.mean(entropy)
+        # Ensure scalar output
+        mean_entropy = torch.mean(entropy)
+        return mean_entropy.squeeze()
 
 
     
@@ -354,7 +362,8 @@ class MultiComponentEntropy(nn.Module):
         # Convert variance to entropy
         entropy = 0.5 * torch.log(2 * np.pi * np.e * (torch.mean(grad_var) + 1e-8))
 
-        return entropy
+        # Ensure scalar output
+        return entropy.squeeze()
 
     def _extract_corresponding_obs(
         self,
@@ -443,7 +452,8 @@ class MultiComponentEntropy(nn.Module):
                 kl_12 = self._kl_divergence_gaussian(mu_1, sigma_1, mu_2, sigma_2)
                 kl_23 = self._kl_divergence_gaussian(mu_2, sigma_2, mu_3, sigma_3)
 
-                return torch.mean(kl_12 + kl_23)
+                result = torch.mean(kl_12 + kl_23)
+                return result.squeeze()
 
         except Exception as e:
             logger.warning(f"Error in solver entropy estimation: {e}")
@@ -456,38 +466,46 @@ class MultiComponentEntropy(nn.Module):
         entropy_history: List
     ) -> torch.Tensor:
         """Estimate temporal uncertainty using covariance analysis"""
-        if len(entropy_history) < self.temporal_window:
-            return torch.tensor(0.0, device=z_local.device)
-        
-        # Get temporal differences
-        recent_history = entropy_history[-self.temporal_window:]
-        temporal_diffs = []
-        
-        for i in range(1, len(recent_history)):
-            diff = recent_history[i] - recent_history[i-1]
-            temporal_diffs.append(diff)
-        
-        if temporal_diffs:
-            temporal_tensor = torch.stack(temporal_diffs)
-            temporal_flat = temporal_tensor.flatten()
+        try:
+            if len(entropy_history) < self.temporal_window:
+                return torch.tensor(0.0, device=z_local.device)
 
-            # For 1D case, use variance directly
-            if temporal_flat.numel() == 1:
-                entropy = 0.5 * torch.log(2 * np.pi * np.e * torch.var(temporal_flat))
-            else:
-                cov_matrix = torch.cov(temporal_flat.unsqueeze(0))
+            # Get temporal differences
+            recent_history = entropy_history[-self.temporal_window:]
+            temporal_diffs = []
 
-                # Handle scalar covariance matrix
-                if cov_matrix.dim() == 0:
-                    det_cov = cov_matrix + 1e-6
+            for i in range(1, len(recent_history)):
+                diff = recent_history[i] - recent_history[i-1]
+                # Ensure scalar difference
+                if hasattr(diff, 'numel') and diff.numel() > 1:
+                    diff = torch.mean(diff)
+                temporal_diffs.append(diff)
+
+            if temporal_diffs:
+                # Convert to tensor and ensure all elements are scalars
+                temporal_values = []
+                for diff in temporal_diffs:
+                    if torch.is_tensor(diff):
+                        temporal_values.append(diff.squeeze())
+                    else:
+                        temporal_values.append(torch.tensor(float(diff), device=z_local.device))
+
+                temporal_tensor = torch.stack(temporal_values)
+                temporal_flat = temporal_tensor.flatten()
+
+                # For 1D case, use variance directly
+                if temporal_flat.numel() <= 1:
+                    entropy = torch.tensor(0.0, device=z_local.device)
                 else:
-                    det_cov = torch.det(cov_matrix + torch.eye(cov_matrix.shape[0], device=cov_matrix.device) * 1e-6)
+                    var_temporal = torch.var(temporal_flat, unbiased=False)
+                    entropy = 0.5 * torch.log(2 * np.pi * np.e * (var_temporal + 1e-8))
 
-                entropy = 0.5 * torch.log(2 * np.pi * np.e * det_cov)
+                return entropy.squeeze()
 
-            return entropy
-        
-        return torch.tensor(0.0, device=z_local.device)
+            return torch.tensor(0.0, device=z_local.device)
+        except Exception as e:
+            logger.warning(f"Error in temporal entropy estimation: {e}")
+            return torch.tensor(0.0, device=z_local.device)
     
     def _estimate_spectral_entropy(
         self,
@@ -495,19 +513,27 @@ class MultiComponentEntropy(nn.Module):
         f: int
     ) -> torch.Tensor:
         """Estimate spectral uncertainty using power spectral density"""
-        # Compute FFT along time dimension
-        z_fft = torch.fft.fft(z_local, dim=1)
-        power_spectrum = torch.abs(z_fft) ** 2
-        
-        # Normalize to get probability distribution
-        power_sum = torch.sum(power_spectrum, dim=1, keepdim=True)
-        p_omega = power_spectrum / (power_sum + 1e-8)
-        
-        # Compute spectral entropy: H = -Σ p(ω) log p(ω)
-        log_p = torch.log(p_omega + 1e-8)
-        entropy = -torch.sum(p_omega * log_p)
-        
-        return entropy
+        try:
+            # Compute FFT along time dimension
+            z_fft = torch.fft.fft(z_local, dim=1)
+            power_spectrum = torch.abs(z_fft) ** 2
+
+            # Normalize to get probability distribution
+            power_sum = torch.sum(power_spectrum, dim=1, keepdim=True)
+            p_omega = power_spectrum / (power_sum + 1e-8)
+
+            # Compute spectral entropy: H = -Σ p(ω) log p(ω)
+            log_p = torch.log(p_omega + 1e-8)
+            entropy = -torch.sum(p_omega * log_p)
+
+            # Ensure scalar output
+            if entropy.numel() > 1:
+                entropy = torch.mean(entropy)
+
+            return entropy.squeeze()
+        except Exception as e:
+            logger.warning(f"Error in spectral entropy estimation: {e}")
+            return torch.tensor(0.0, device=z_local.device)
     
     def _compute_adaptive_weights(
         self,
